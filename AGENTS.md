@@ -27,6 +27,6 @@ La documentazione di progetto è in `docs/`:
 - Prove con scritture reali: solo su `quadraconti.com` (autorizzato da Mattia il
   2026-10-28), riportandolo poi allo stato di partenza.
 - Il parcheggio è nativo (Worker `dash-plus-plus-park` pubblicato da Dash++ in ogni
-  account). I vecchi Worker `park-*` vanno pensionati.
+  account). I vecchi Worker `park-*` sono stati eliminati.
 - Il deploy dell'istanza di 16bit prende account, dominio e amministratori da `.env`
   (non committato, vedi `docs/setup.md`): senza, andrebbe su workers.dev.
