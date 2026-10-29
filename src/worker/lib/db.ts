@@ -109,6 +109,24 @@ const SCHEMA = [
     updated_at INTEGER,
     updated_by TEXT
   )`,
+  // MCP clients (registered by themselves) and their pending authorizations (see mcp-auth.ts).
+  `CREATE TABLE IF NOT EXISTS mcp_clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS mcp_requests (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    state TEXT,
+    challenge TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    code_hash TEXT,
+    token TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS mcp_requests_code ON mcp_requests(code_hash)`,
   // Old rows used the Italian name for changes made outside Dash++.
   `UPDATE changes SET source = 'external' WHERE source = 'esterno'`,
 ];

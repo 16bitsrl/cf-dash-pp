@@ -5,6 +5,7 @@ import {
   CaretUpDownIcon,
   CheckIcon,
   GearSixIcon,
+  PlugsConnectedIcon,
   ClockCounterClockwiseIcon,
   EnvelopeSimpleIcon,
   FoldersIcon,
@@ -148,6 +149,9 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
                   ))}
                 </DropdownMenu.SubContent>
               </DropdownMenu.Sub>
+              <DropdownMenu.LinkItem href="/mcp" icon={PlugsConnectedIcon}>
+                {t.mcp.menu}
+              </DropdownMenu.LinkItem>
               {me.admin && (
                 <DropdownMenu.LinkItem href="/setup" icon={GearSixIcon}>
                   {t.nav.setup}

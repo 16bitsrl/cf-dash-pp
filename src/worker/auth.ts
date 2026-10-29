@@ -80,18 +80,17 @@ async function tokenRequest(env: Env, params: Record<string, string>) {
   });
   const json = (await res.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string; expires_in?: number; error?: string; error_description?: string };
   if (!res.ok || !json.access_token) throw new Error(json.error_description ?? json.error ?? `HTTP ${res.status}`);
-  return json as { access_token: string; refresh_token?: string; expires_in?: number };
+  return json as Tokens;
 }
 
 export const publicUrl = (c: Ctx) => c.env.PUBLIC_URL || new URL(c.req.url).origin;
 export const redirectUri = (c: Ctx) => `${publicUrl(c)}/auth/callback`;
 
-export async function startLogin(c: Ctx) {
+/** The Cloudflare sign-in address; after it, the callback goes on to `returnTo`. */
+export async function cfAuthorizeUrl(c: Ctx, returnTo: string) {
   const state = randomToken(24);
   const verifier = randomToken(48);
   const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
-  const ret = c.req.query("return") ?? "/";
-  const returnTo = ret.startsWith("/") && !ret.startsWith("//") ? ret : "/";
   await c.env.DB.prepare("DELETE FROM oauth_states WHERE created_at < ?").bind(now() - 600_000).run();
   await c.env.DB.prepare("INSERT INTO oauth_states (state, verifier, return_to, created_at) VALUES (?, ?, ?, ?)").bind(state, verifier, returnTo, now()).run();
   const url = new URL(OAUTH.authorize);
@@ -104,10 +103,28 @@ export async function startLogin(c: Ctx) {
     code_challenge: challenge,
     code_challenge_method: "S256",
   }).toString();
-  return c.redirect(url.toString());
+  return url.toString();
 }
 
-export async function finishLogin(c: Ctx): Promise<{ ok: true; returnTo: string } | { ok: false; code: string; params?: Record<string, string> }> {
+export async function startLogin(c: Ctx) {
+  const ret = c.req.query("return") ?? "/";
+  return c.redirect(await cfAuthorizeUrl(c, ret.startsWith("/") && !ret.startsWith("//") ? ret : "/"));
+}
+
+// Sign-ins started by an MCP client: `return_to` is "mcp:<request id>" and no cookie is set.
+export const MCP_RETURN = "mcp:";
+
+export type Tokens = { access_token: string; refresh_token?: string; expires_in?: number };
+
+/** Stores a session under the hash of its id. */
+export async function insertSession(env: Env, id: string, email: string, tok: Tokens) {
+  const t = now();
+  await env.DB.prepare("INSERT INTO sessions (id, email, access_token, refresh_token, expires_at, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .bind(id, email, await seal(env.SESSION_KEY, tok.access_token), tok.refresh_token ? await seal(env.SESSION_KEY, tok.refresh_token) : null, t + (tok.expires_in ?? 3600) * 1000, t, t)
+    .run();
+}
+
+export async function finishLogin(c: Ctx): Promise<{ ok: true; returnTo: string; email: string; tokens: Tokens } | { ok: false; code: string; params?: Record<string, string> }> {
   const { code, state, error, error_description } = c.req.query();
   if (error) return { ok: false, code: error === "access_denied" ? "login-denied" : "login-failed", params: { message: error_description ?? error } };
   if (!code || !state) return { ok: false, code: "login-incomplete" };
@@ -119,30 +136,24 @@ export async function finishLogin(c: Ctx): Promise<{ ok: true; returnTo: string 
   const email = me.result?.email?.toLowerCase();
   if (!email) return { ok: false, code: "login-no-email" };
   await claimAdmin(c.env, email);
-  const id = randomToken(32);
-  const t = now();
-  await c.env.DB.prepare("INSERT INTO sessions (id, email, access_token, refresh_token, expires_at, created_at, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(
-      await sha256(id),
-      email,
-      await seal(c.env.SESSION_KEY, tok.access_token),
-      tok.refresh_token ? await seal(c.env.SESSION_KEY, tok.refresh_token) : null,
-      t + (tok.expires_in ?? 3600) * 1000,
-      t,
-      t,
-    )
-    .run();
-  setCookie(c, COOKIE, id, { httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: SESSION_DAYS * 86400 });
-  return { ok: true, returnTo: row.return_to };
+  if (!row.return_to.startsWith(MCP_RETURN)) {
+    const id = randomToken(32);
+    await insertSession(c.env, await sha256(id), email, tok);
+    setCookie(c, COOKIE, id, { httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: SESSION_DAYS * 86400 });
+  }
+  return { ok: true, returnTo: row.return_to, email, tokens: tok };
 }
 
 type SessionRow = { id: string; email: string; access_token: string; refresh_token: string | null; expires_at: number; last_seen: number };
 
 /** The signed-in user and their token for this request, refreshed when about to expire. */
-export async function session(c: Ctx): Promise<{ email: string; token: string } | null> {
+export async function session(c: Ctx) {
   const raw = getCookie(c, COOKIE);
-  if (!raw) return null;
-  const id = await sha256(raw);
+  return raw ? sessionById(c, await sha256(raw)) : null;
+}
+
+/** The session stored under this id hash, with its token refreshed when about to expire. */
+export async function sessionById(c: Ctx, id: string): Promise<{ email: string; token: string } | null> {
   const row = await c.env.DB.prepare("SELECT * FROM sessions WHERE id = ?").bind(id).first<SessionRow>();
   if (!row || row.last_seen < now() - SESSION_DAYS * 86400_000) return null;
   if (row.expires_at > now() + 60_000) {

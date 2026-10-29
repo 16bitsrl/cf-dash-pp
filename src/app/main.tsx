@@ -11,6 +11,8 @@ import { useApi, useLoginNeeded, type Me } from "./lib/api";
 import { useZonePrefetch } from "./lib/hooks";
 import { navigate, parseRoute, useLinkInterception, useLocation } from "./lib/router";
 import { Activity } from "./pages/Activity";
+import { Connect } from "./pages/Connect";
+import { McpInfo } from "./pages/McpInfo";
 import { Domains } from "./pages/Domains";
 import { Groups } from "./pages/Groups";
 import { Home } from "./pages/Home";
@@ -81,11 +83,12 @@ function App() {
   const path = useLocation();
   const loginNeeded = useLoginNeeded();
   const isSetup = path.split("?")[0] === "/setup";
-  const me = useApi<Me>(isSetup ? null : "/me");
+  const isConnect = path.split("?")[0] === "/connect" || path.split("?")[0] === "/mcp";
+  const me = useApi<Me>(isSetup || isConnect ? null : "/me");
   const route = parseRoute(path);
 
   useEffect(() => {
-    if (!me.data || isSetup) return;
+    if (!me.data || isSetup || isConnect) return;
     const ids = me.data.accounts.map((a) => a.id);
     if (route.page === "root" || route.page === "notfound" || ("acc" in route && !ids.includes(route.acc))) {
       const last = localStorage.getItem(LAST_ACCOUNT);
@@ -94,8 +97,9 @@ function App() {
     } else if ("acc" in route) {
       localStorage.setItem(LAST_ACCOUNT, route.acc);
     }
-  }, [me.data, route, isSetup]);
+  }, [me.data, route, isSetup, isConnect]);
 
+  if (isConnect) return path.startsWith("/mcp") ? <McpInfo /> : <Connect />;
   if (isSetup) return <Setup standalone />;
   if (loginNeeded || new URLSearchParams(location.search).has("login_error")) return <Login />;
   if (me.error)

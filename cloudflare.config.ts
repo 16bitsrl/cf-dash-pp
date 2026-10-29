@@ -24,12 +24,13 @@ export default defineConfig(({ mode }) => ({
     domains: hostname ? [hostname] : [],
     assets: {
       notFoundHandling: "single-page-application",
-      runWorkerFirst: ["/api/*", "/auth/*"],
+      runWorkerFirst: ["/api/*", "/auth/*", "/mcp", "/oauth/*", "/.well-known/*"],
     },
     observability: { enabled: true },
     triggers: [triggers.scheduled({ schedule: "*/15 * * * *" })],
     env: {
       DB: bindings.d1({ name: "dash-plus-plus" }),
+      ASSETS: bindings.assets(),
       PUBLIC_URL: !!hostname && bindings.text(`https://${hostname}`),
       ACCOUNT_ID: !!accountId && bindings.text(accountId),
       // Superadmins: open the setup page and enable accounts. Without them, the first to sign in.

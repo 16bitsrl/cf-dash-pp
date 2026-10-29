@@ -1,13 +1,15 @@
 import { Hono } from "hono";
 import { addRedirect, applyMailFix, Conflict, deleteRedirect, disableParking, enableParking, setDmarc, setMx, setSpf, updateRedirect, type Done, type FixOptions } from "./actions";
 import type { MxPreset } from "./lib/senders";
-import { finishLogin, isDev, logout, OAUTH_SCOPES, publicUrl, redirectUri, session, startLogin, type Ctx, type Env, type Vars } from "./auth";
+import { finishLogin, isDev, logout, MCP_RETURN, OAUTH_SCOPES, publicUrl, redirectUri, session, startLogin, type Ctx, type Env, type Vars } from "./auth";
 import { admins, getConfig, isAdmin, setConfig } from "./config";
 import { CfApi, CfError, type Account, type Zone } from "./lib/cf";
 import { ensureSchema, now } from "./lib/db";
 import { dohResolver } from "./lib/doh";
 import type { FixId } from "./lib/mail";
 import { PARK_WORKER, type RedirectInput } from "./lib/zone-state";
+import { handleRpc, ToolError, type McpCtx } from "./mcp";
+import { bearer, bearerSession, completeGrant, mcpAuth, resourceMetadataUrl } from "./mcp-auth";
 import { cleanParkSettings, settingsFromVersion, type ParkSettings } from "./park/publish";
 import { ensureParkingPublished, loadParkSettings, saveAndPublish } from "./park/settings";
 import { parkStatus, pool, syncAll, syncZone } from "./services";
@@ -22,6 +24,8 @@ app.use("*", async (c, next) => {
 
 /** Who is signed in, and their token (in local development, the development token). */
 async function whoami(c: Ctx) {
+  // An MCP client: only its token counts, never the cookie.
+  if (bearer(c)) return bearerSession(c);
   if (isDev(c)) return { email: (c.env.DEV_EMAIL ?? "dev@localhost").toLowerCase(), token: c.env.DEV_TOKEN! };
   return session(c);
 }
@@ -34,7 +38,12 @@ app.get("/auth/callback", async (c) => {
   const fail = (code: string, params?: Record<string, string>) => c.redirect(`/?login_error=${encodeURIComponent(code)}${params ? `&login_params=${encodeURIComponent(JSON.stringify(params))}` : ""}`);
   try {
     const res = await finishLogin(c);
-    return res.ok ? c.redirect(res.returnTo) : fail(res.code, res.params);
+    if (!res.ok) return fail(res.code, res.params);
+    if (res.returnTo.startsWith(MCP_RETURN)) {
+      const to = await completeGrant(c, res.returnTo.slice(MCP_RETURN.length), res.email, res.tokens);
+      return c.redirect(to ?? "/connect?error=expired");
+    }
+    return c.redirect(res.returnTo);
   } catch (e) {
     return fail("login-failed", { message: e instanceof Error ? e.message : "" });
   }
@@ -155,8 +164,9 @@ app.route("/api/setup", setup);
 const api = new Hono<{ Bindings: Env; Variables: Vars }>();
 
 api.use("*", async (c, next) => {
-  if (c.req.method !== "GET") {
-    // Changes only come from the app: same origin and a dedicated header.
+  if (c.req.method !== "GET" && !bearer(c)) {
+    // Changes only come from the app: same origin and a dedicated header. A bearer token is not
+    // sent by the browser on its own, so it needs neither.
     const origin = c.req.header("origin");
     if (c.req.header("x-dash-plus-plus") !== "1" || (origin && origin !== new URL(c.req.url).origin)) return c.json({ error: "bad-request" }, 400);
   }
@@ -528,6 +538,63 @@ api.delete("/accounts/:acc/groups/:id", async (c) => {
 });
 
 app.route("/api", api);
+
+// --- MCP ---
+
+app.route("/", mcpAuth);
+
+const mcpCors = { "access-control-allow-origin": "*", "access-control-expose-headers": "www-authenticate, mcp-session-id" };
+
+app.options("/mcp", (c) =>
+  c.body(null, 204, { ...mcpCors, "access-control-allow-methods": "POST, GET, DELETE", "access-control-allow-headers": "authorization, content-type, mcp-protocol-version, mcp-session-id", "access-control-max-age": "86400" }),
+);
+
+// No server-sent stream and no sessions: every request stands alone. A browser gets the page that
+// explains how to connect an assistant.
+app.get("/mcp", async (c) => {
+  if (c.req.header("accept")?.includes("text/html")) return c.env.ASSETS.fetch(new Request(new URL("/", c.req.url)));
+  return c.body(null, 405, { ...mcpCors, allow: "POST" });
+});
+app.delete("/mcp", (c) => c.body(null, 405, { ...mcpCors, allow: "POST" }));
+
+app.post("/mcp", async (c) => {
+  const who = await bearerSession(c);
+  if (!who) return c.json({ error: "invalid_token" }, 401, { ...mcpCors, "www-authenticate": `Bearer resource_metadata="${resourceMetadataUrl(c)}"` });
+  const ctx: McpCtx = {
+    async call(method, path, body) {
+      const res = await app.fetch(
+        new Request(new URL(`/api${path}`, c.req.url), {
+          method,
+          headers: { authorization: c.req.header("authorization")!, ...(body !== undefined && { "content-type": "application/json" }) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+        c.env,
+        c.executionCtx,
+      );
+      const json = (await res.json().catch(() => ({}))) as { error?: string; params?: Record<string, unknown> };
+      if (!res.ok) throw new ToolError(json.error ?? "unexpected", json.params);
+      return json as never;
+    },
+    async zone(domain) {
+      const zones = await new CfApi(who.token).req<Zone[]>("GET", `/zones?name=${encodeURIComponent(domain)}`).catch(() => []);
+      if (!zones[0]) throw new ToolError("zone-not-found", { domain });
+      return zones[0].id;
+    },
+  };
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400, mcpCors);
+  const one = async (m: unknown) => {
+    try {
+      return await handleRpc(m as Parameters<typeof handleRpc>[0], ctx);
+    } catch (e) {
+      console.error(e);
+      return { jsonrpc: "2.0", id: (m as { id?: unknown }).id ?? null, error: { code: -32603, message: "Internal error" } };
+    }
+  };
+  const out = Array.isArray(body) ? (await Promise.all(body.map(one))).filter(Boolean) : await one(body);
+  if (!out || (Array.isArray(out) && !out.length)) return c.body(null, 202, mcpCors);
+  return c.json(out, 200, mcpCors);
+});
 
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 
