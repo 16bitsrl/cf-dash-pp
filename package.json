@@ -1,0 +1,45 @@
+{
+  "name": "dash-plus-plus",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "deploy": "cf deploy"
+  },
+  "dependencies": {
+    "@cloudflare/kumo": "^2.16.0",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "echarts": "^6.1.0",
+    "hono": "^4.13.14",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^2.0.0-beta.v.6",
+    "@cloudflare/workers-types": "^5.20261028.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "cf": "^1.0.0-beta.24",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SESSION_KEY": {
+        "description": "A long random string that encrypts sessions and saved settings. Generate one with `openssl rand -hex 32`."
+      },
+      "SETUP_CODE": {
+        "description": "A code of your choice. Dash++ asks for it to open its setup page, until signing in with Cloudflare works."
+      }
+    }
+  }
+}
