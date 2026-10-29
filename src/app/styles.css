@@ -42,3 +42,8 @@ body {
 .dpp-table tbody tr:last-child td {
   @apply border-b-0;
 }
+
+/* Il bordo spesso delle caselle solo per chi usa la tastiera: col mouse la casella cliccata sembrava più grande. */
+[data-kumo-component="Checkbox"]:focus:not(:focus-visible) {
+  @apply ring-1!;
+}

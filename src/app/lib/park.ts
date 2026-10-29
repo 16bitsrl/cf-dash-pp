@@ -20,14 +20,18 @@ export function useParkPages(acc: string, enabled = true) {
   const pageOf = (domain: string) => (settings && settings.assign[domain]) || settings?.defaultPage || "";
   const items = settings ? Object.fromEntries(settings.pages.map((p) => [p.id, p.id === settings.defaultPage ? `${pageName(p)} (${t.parking.default})` : pageName(p)])) : {};
 
-  async function setPageOf(domain: string, id: string) {
-    if (!settings) return;
+  async function setPageOf(domains: string | string[], id: string) {
+    if (!settings) return false;
     const assign = { ...settings.assign };
-    if (id === settings.defaultPage) delete assign[domain];
-    else assign[domain] = id;
+    for (const domain of [domains].flat()) {
+      if (id === settings.defaultPage) delete assign[domain];
+      else assign[domain] = id;
+    }
     const next: ParkSettings = { ...settings, assign };
     setCached(path, { ...park.data, settings: next });
-    if (!(await action.run("PUT", path, next, t.parking.published))) park.reload();
+    const ok = !!(await action.run("PUT", path, next, t.parking.published));
+    if (!ok) park.reload();
+    return ok;
   }
 
   return { park, settings, pageName, pageOf, setPageOf, items, busy: action.busy };

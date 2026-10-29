@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanParkSettings, fromLegacy, parkFiles, readSettingsModule, settingsModule, type ParkSettings } from "../src/worker/park/publish";
+import { cleanParkSettings, fromLegacy, parkFiles, readSettingsModule, settingsModule, siteUrl, type ParkSettings } from "../src/worker/park/publish";
 
 const brand = { name: "Acme", site: "https://acme.it", accent: "#ff0000", leadEn: null, leadIt: null, logo: null, logoHeight: null, icon: null };
 
@@ -95,5 +95,26 @@ describe("impostazioni nel Worker di parcheggio", () => {
     const form = new FormData();
     form.append("worker.js", new Blob(["export default {}"], { type: "application/javascript+module" }), "worker.js");
     expect(await readSettingsModule(new Response(form))).toBeNull();
+  });
+});
+
+describe("siteUrl", () => {
+  it("accetta indirizzi web validi", () => {
+    expect(siteUrl("https://acme.it")).toBe("https://acme.it/");
+    expect(siteUrl("http://www.acme.it/chi-siamo?x=1")).toBe("http://www.acme.it/chi-siamo?x=1");
+  });
+
+  it("senza protocollo aggiunge https", () => {
+    expect(siteUrl("  acme.it ")).toBe("https://acme.it/");
+    expect(siteUrl("acme.it:8080")).toBe("https://acme.it:8080/");
+  });
+
+  it("rifiuta tutto il resto", () => {
+    for (const s of ["", "acme", "acme .it", "javascript:alert(1)", "ftp://acme.it", "https://", "https://acme.", "mailto:a@acme.it", "https://user:pw@acme.it"]) expect(siteUrl(s), s).toBeNull();
+  });
+
+  it("le impostazioni salvate tengono solo siti validi", () => {
+    const s = cleanParkSettings({ pages: [{ id: "a", label: "", brand: { ...brand, site: "acme .it" } }], defaultPage: "a", assign: {} });
+    expect(s.pages[0].brand?.site).toBeNull();
   });
 });

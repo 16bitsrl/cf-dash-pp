@@ -34,10 +34,23 @@ export function fromLegacy(l: LegacyParkSettings): ParkSettings {
   return { pages, defaultPage: NEUTRAL.id, assign: Object.fromEntries(l.include.map((d) => [d, "brand"])) };
 }
 
+/** The brand's web address, with https:// added when missing; null when it isn't a web address. */
+export function siteUrl(input: string): string | null {
+  const s = input.trim();
+  if (!s || /\s/.test(s)) return null;
+  try {
+    const u = new URL(/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s) ? s : `https://${s}`);
+    const host = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(u.hostname);
+    return (u.protocol === "https:" || u.protocol === "http:") && host && !u.username && !u.password ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function cleanBrand(b: Brand): Brand {
   return {
     name: String(b.name ?? "").slice(0, 80),
-    site: b.site && /^https?:\/\//.test(b.site) ? b.site : null,
+    site: b.site ? siteUrl(String(b.site)) : null,
     accent: /^#[0-9a-f]{6}$/i.test(b.accent) ? b.accent : "#3a3b44",
     leadEn: b.leadEn?.slice(0, 160) || null,
     leadIt: b.leadIt?.slice(0, 160) || null,

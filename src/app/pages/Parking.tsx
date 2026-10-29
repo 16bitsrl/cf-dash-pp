@@ -1,12 +1,12 @@
-import { Badge, Banner, Button, Checkbox, Input, LayerCard, Select, Switch, Table, Tabs } from "@cloudflare/kumo";
+import { Badge, Banner, Button, Checkbox, Input, LayerCard, Select, Switch, Table, Tabs, useKumoToastManager } from "@cloudflare/kumo";
 import { InfoIcon, PlusIcon, SignpostIcon, TrashIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { NO_SITE, parkPage } from "../../worker/park/page";
-import type { Asset, Brand, ParkPageDef, ParkSettings } from "../../worker/park/publish";
+import { siteUrl, type Asset, type Brand, type ParkPageDef, type ParkSettings } from "../../worker/park/publish";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Container, DeepLink, EmptyState, ErrorState, Loading, PageHeader, TableCard, UsageBadge } from "../components/ui";
 import { useLang, useT, type Lang } from "../i18n";
-import type { ParkInfo, ZoneListItem } from "../lib/api";
+import { api, setCached, type Mutation, type ParkInfo, type ZoneListItem } from "../lib/api";
 import { dash, useFormat } from "../lib/format";
 import { useAction, useMutation, useZones } from "../lib/hooks";
 import { usePageName, useParkPages } from "../lib/park";
@@ -24,17 +24,34 @@ const readFile = (file: File) =>
   });
 
 const dataUrl = (a: Asset | null) => (a ? `data:${a.type};base64,${a.data}` : null);
+const badSite = (b: Brand) => !!b.site?.trim() && !siteUrl(b.site);
+
+const IMAGE_TYPES = ["image/png", "image/svg+xml", "image/jpeg", "image/webp"];
 
 function ImageField({ label, value, onChange }: { label: string; value: Asset | null; onChange: (a: Asset | null) => void }) {
   const t = useT();
+  const [over, setOver] = useState(false);
+  const pick = async (file: File | undefined) => file && IMAGE_TYPES.includes(file.type) && onChange(await readFile(file));
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-sm font-medium">{label}</span>
-      <div className="flex items-center gap-3">
-        <div className="flex h-12 w-28 items-center justify-center rounded-md border border-kumo-hairline bg-kumo-canvas p-1">{value && <img src={dataUrl(value)!} alt="" className="max-h-full max-w-full object-contain" />}</div>
+      <div
+        className={`-m-1 flex items-center gap-3 rounded-lg border border-dashed p-1 ${over ? "border-kumo-brand bg-kumo-tint" : "border-transparent"}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setOver(true);
+        }}
+        onDragLeave={(e) => !e.currentTarget.contains(e.relatedTarget as Node) && setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          pick(e.dataTransfer.files[0]);
+        }}
+      >
+        <div className="flex h-12 w-28 items-center justify-center rounded-md border border-kumo-hairline bg-kumo-canvas p-1">{value ? <img src={dataUrl(value)!} alt="" className="max-h-full max-w-full object-contain" /> : <span className="text-xs text-kumo-subtle">{t.parking.dropImage}</span>}</div>
         <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-kumo-line px-2.5 py-1 text-sm hover:bg-kumo-tint">
           <UploadSimpleIcon size={14} /> {t.parking.upload}
-          <input type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp" className="sr-only" onChange={async (e) => e.target.files?.[0] && onChange(await readFile(e.target.files[0]))} />
+          <input type="file" accept={IMAGE_TYPES.join(",")} className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
         </label>
         {value && (
           <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
@@ -140,7 +157,15 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
               <>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Input label={t.parking.brandName} value={brand.name} onChange={(e) => setBrand({ name: e.target.value })} />
-                  <Input label={t.parking.brandSite} placeholder="https://example.com" value={brand.site ?? ""} onChange={(e) => setBrand({ site: e.target.value || null })} />
+                  <Input
+                    label={t.parking.brandSite}
+                    placeholder="https://example.com"
+                    value={brand.site ?? ""}
+                    onChange={(e) => setBrand({ site: e.target.value || null })}
+                    onBlur={() => brand.site && siteUrl(brand.site) && setBrand({ site: siteUrl(brand.site) })}
+                    variant={badSite(brand) ? "error" : "default"}
+                    error={badSite(brand) ? t.parking.brandSiteInvalid : undefined}
+                  />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <span className="text-sm font-medium">{t.parking.brandColor}</span>
@@ -166,7 +191,7 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
               <Button
                 variant="primary"
                 loading={busy}
-                disabled={s.pages.some((p) => p.brand && !p.brand.name.trim())}
+                disabled={s.pages.some((p) => p.brand && (!p.brand.name.trim() || badSite(p.brand)))}
                 onClick={async () => {
                   if (await run("PUT", `/accounts/${acc}/park`, { ...s, assign: info.settings.assign }, t.parking.published)) onSaved();
                 }}
@@ -213,17 +238,24 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
 }
 
 const FILTERS = ["free", "parked", "all"] as const;
+const isParked = (z: ZoneListItem) => z.cached?.usage === "parked" || z.cached?.usage === "parking-partial";
 
 export function Parking({ acc }: { acc: string }) {
   const t = useT();
+  const toast = useKumoToastManager();
   const { data, error, reload, syncing, syncAll } = useZones(acc);
-  const { park, settings, pageOf, setPageOf, items: pageItems } = useParkPages(acc);
+  const { park, settings, pageOf, setPageOf, items: pageItems, busy: savingPage } = useParkPages(acc);
   const initialPage = new URLSearchParams(useLocation().split("?")[1] ?? "").get("page");
   const { run, busy } = useMutation();
+  const [tab, setTab] = useState<"domains" | "pages">(initialPage ? "pages" : "domains");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("free");
   const [q, setQ] = useState("");
   const [target, setTarget] = useState<ZoneListItem | null>(null);
   const [protectMail, setProtectMail] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState<"park" | "page" | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkPage, setBulkPage] = useState("");
   const all = useFilter(data?.zones, q);
   const zones = all.filter((z) => {
     const u = z.cached?.usage;
@@ -231,22 +263,49 @@ export function Parking({ acc }: { acc: string }) {
     if (filter === "free") return u === "empty" || u === "parking-partial";
     return true;
   });
+  const picked = zones.filter((z) => selected.has(z.id));
+  const toPark = picked.filter((z) => z.cached?.usage === "empty");
+  const toRepage = picked.filter(isParked);
+  const manyPages = !!settings && settings.pages.length > 1;
+  const allSelected = zones.length > 0 && zones.every((z) => selected.has(z.id));
+  const toggle = (id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
+
+  // One domain at a time: the first one may also publish the parking page.
+  async function parkSelected() {
+    setBulkBusy(true);
+    const failed: string[] = [];
+    for (const z of toPark) {
+      try {
+        const res = await api<Mutation>("POST", `/zones/${z.id}/parking`, { enable: true, protectMail: protectMail && z.cached?.mail.mode !== "mail" });
+        setCached(`/zones/${z.id}`, res.zone);
+      } catch {
+        failed.push(z.name);
+      }
+    }
+    const ok = toPark.length - failed.length;
+    if (ok) toast.add({ title: t.parking.doneSome(ok), variant: "success" });
+    if (failed.length) toast.add({ title: t.failed, description: t.parking.notParked(failed.join(", ")), variant: "error" });
+    setBulkBusy(false);
+    setBulk(null);
+    setSelected(new Set());
+    reload();
+    park.reload();
+  }
 
   return (
     <>
-      <PageHeader title={t.parking.title} description={t.parking.description} actions={<SyncButton syncing={syncing} onClick={syncAll} />} />
+      <PageHeader title={t.parking.title} description={t.parking.description} actions={tab === "domains" && <SyncButton syncing={syncing} onClick={syncAll} />} />
       <Container className="flex flex-col gap-6 pt-6">
         {park.error?.code === "forbidden" && <Banner variant="secondary" icon={<InfoIcon weight="fill" />} description={t.parking.noAccess} />}
-        {park.data && (
+        {park.data && <Tabs variant="underline" tabs={(["domains", "pages"] as const).map((v) => ({ value: v, label: t.parking.tabs[v] }))} value={tab} onValueChange={(v) => setTab(v as typeof tab)} />}
+        {tab === "pages" && park.data ? (
           <PageSettings
             key={initialPage ?? ""}
             acc={acc} info={park.data} onSaved={park.reload} sample={data?.zones.find((z) => z.cached?.usage === "parked")?.name ?? "example.com"}
-            parked={(data?.zones ?? []).filter((z) => z.cached?.usage === "parked" || z.cached?.usage === "parking-partial").map((z) => z.name)}
+            parked={(data?.zones ?? []).filter(isParked).map((z) => z.name)}
             initialPage={initialPage}
           />
-        )}
-
-        {error && !data ? (
+        ) : error && !data ? (
           <ErrorState error={error} onRetry={reload} />
         ) : !data ? (
           <Loading />
@@ -255,14 +314,42 @@ export function Parking({ acc }: { acc: string }) {
             <div className="flex flex-wrap items-center gap-3">
               <Tabs tabs={FILTERS.map((v) => ({ value: v, label: t.parking.filters[v] }))} value={filter} onValueChange={(v) => setFilter(v as (typeof FILTERS)[number])} />
               <SearchBox value={q} onChange={setQ} />
+              {picked.length > 0 && (
+                <div className="flex items-center gap-3">
+                  <span className="text-sm text-kumo-subtle">{t.domains.selected(picked.length)}</span>
+                  {toPark.length > 0 && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setProtectMail(true);
+                        setBulk("park");
+                      }}
+                    >
+                      {t.parking.parkSome(toPark.length)}
+                    </Button>
+                  )}
+                  {manyPages && toRepage.length > 0 && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setBulkPage(settings.defaultPage);
+                        setBulk("page");
+                      }}
+                    >
+                      {t.parking.changePage(toRepage.length)}
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
             <TableCard>
               <Table>
                 <Table.Header>
                   <Table.Row>
+                    {park.data && <Table.CheckHead checked={allSelected} indeterminate={picked.length > 0 && !allSelected} onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(zones.map((z) => z.id)))} aria-label={t.common.all} />}
                     <Table.Head>{t.common.domain}</Table.Head>
                     <Table.Head>{t.domains.usage}</Table.Head>
-                    {settings && settings.pages.length > 1 && <Table.Head>{t.parking.pageColumn}</Table.Head>}
+                    {manyPages && <Table.Head>{t.parking.pageColumn}</Table.Head>}
                     <Table.Head className="w-48 text-right">
                       <span className="sr-only">{t.common.actions}</span>
                     </Table.Head>
@@ -270,9 +357,10 @@ export function Parking({ acc }: { acc: string }) {
                 </Table.Header>
                 <Table.Body>
                   {zones.map((z) => {
-                    const parked = z.cached?.usage === "parked" || z.cached?.usage === "parking-partial";
+                    const parked = isParked(z);
                     return (
-                      <Table.Row key={z.id}>
+                      <Table.Row key={z.id} className="h-12">
+                        {park.data && <Table.CheckCell checked={selected.has(z.id)} onCheckedChange={() => toggle(z.id)} aria-label={z.name} />}
                         <Table.Cell>
                           <a href={zonePath(acc, z.name, "parking")} className="font-medium underline decoration-kumo-line underline-offset-4">
                             {z.name}
@@ -281,7 +369,7 @@ export function Parking({ acc }: { acc: string }) {
                         <Table.Cell>
                           <UsageBadge usage={z.cached?.usage} target={z.cached?.redirectTarget} />
                         </Table.Cell>
-                        {settings && settings.pages.length > 1 && (
+                        {manyPages && (
                           <Table.Cell>
                             {parked && (
                               <Select
@@ -340,6 +428,26 @@ export function Parking({ acc }: { acc: string }) {
         }}
       >
         <Checkbox checked={protectMail} disabled={target?.cached?.mail.mode === "mail"} onCheckedChange={(v) => setProtectMail(!!v)} label={target?.cached?.mail.mode === "mail" ? t.parking.protectMailNo : t.parking.protectMail} />
+      </ConfirmDialog>
+
+      <ConfirmDialog open={bulk === "park"} onOpenChange={(o) => !o && !bulkBusy && setBulk(null)} title={t.parking.parkSomeTitle(toPark.length)} description={t.parking.parkSomeDescription} confirm={t.parking.parkSomeTitle(toPark.length)} busy={bulkBusy} onConfirm={parkSelected}>
+        <Checkbox checked={protectMail} onCheckedChange={(v) => setProtectMail(!!v)} label={t.parking.protectMailSome} />
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={bulk === "page"}
+        onOpenChange={(o) => !o && setBulk(null)}
+        title={t.parking.changePageTitle(toRepage.length)}
+        confirm={t.common.save}
+        busy={savingPage}
+        onConfirm={async () => {
+          if (await setPageOf(toRepage.map((z) => z.name), bulkPage)) {
+            setBulk(null);
+            setSelected(new Set());
+          }
+        }}
+      >
+        <Select label={t.parking.pageColumn} value={bulkPage} onValueChange={(v) => setBulkPage(String(v))} items={pageItems} />
       </ConfirmDialog>
     </>
   );

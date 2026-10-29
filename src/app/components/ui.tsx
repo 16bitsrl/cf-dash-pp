@@ -112,7 +112,11 @@ export function UsageBadge({ usage, target }: { usage: Usage | null | undefined;
     <span className={`inline-flex min-w-0 items-center gap-1.5 text-sm ${u.className}`}>
       <u.icon size={15} className="shrink-0" />
       <span className="shrink-0">{t.usage[usage]}</span>
-      {usage === "redirect" && target && <span className="truncate text-kumo-subtle">→ {target.replace(/^https?:\/\//, "")}</span>}
+      {usage === "redirect" && target && (
+        <span className="max-w-64 truncate text-kumo-subtle" title={target}>
+          → {target.replace(/^https?:\/\//, "")}
+        </span>
+      )}
       {usage === "site" && target && <span className="truncate text-kumo-subtle">· {t.usage.worker(target)}</span>}
     </span>
   );
