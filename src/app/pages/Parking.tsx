@@ -1,17 +1,19 @@
-import { Badge, Banner, Button, Checkbox, Input, LayerCard, Select, Switch, Table, Tabs, useKumoToastManager } from "@cloudflare/kumo";
-import { InfoIcon, PlusIcon, SignpostIcon, TrashIcon, UploadSimpleIcon } from "@phosphor-icons/react";
+import { Badge, Banner, Breadcrumbs, Button, Checkbox, DropdownMenu, Input, LayerCard, Select, Switch, Table, Tabs, useKumoToastManager } from "@cloudflare/kumo";
+import { ClockCounterClockwiseIcon, GearSixIcon, InfoIcon, PlusIcon, SignpostIcon, TrashIcon, UploadSimpleIcon } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { NO_SITE, parkPage } from "../../worker/park/page";
 import { siteUrl, type Asset, type Brand, type ParkPageDef, type ParkSettings } from "../../worker/park/publish";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Container, DeepLink, EmptyState, ErrorState, Loading, PageHeader, TableCard, UsageBadge } from "../components/ui";
 import { useLang, useT, type Lang } from "../i18n";
-import { api, setCached, type Mutation, type ParkInfo, type ZoneListItem } from "../lib/api";
+import { api, setCached, useApi, type ApiError, type Mutation, type ParkInfo, type ZoneListItem } from "../lib/api";
 import { dash, useFormat } from "../lib/format";
 import { useAction, useMutation, useZones } from "../lib/hooks";
-import { usePageName, useParkPages } from "../lib/park";
-import { useLocation, zonePath } from "../lib/router";
+import { parkingPagesPath, usePageName, useParkPages } from "../lib/park";
+import { navigate, useLocation, zonePath } from "../lib/router";
 import { SearchBox, SyncButton, useFilter } from "./Domains";
+
+type ParkVersion = { id: string; number: number; at: number; by: string | null };
 
 const NEW_BRAND: Brand = { name: "", site: null, accent: "#f6821f", leadEn: null, leadIt: null, logo: null, logoHeight: null, icon: null };
 
@@ -74,6 +76,9 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
   const [removing, setRemoving] = useState(false);
   const [host, setHost] = useState(sample);
   const [lang, setLang] = useState<Lang>(uiLang);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const versions = useApi<{ versions: ParkVersion[] }>(versionsOpen ? `/accounts/${acc}/park/versions` : null);
+  const toast = useKumoToastManager();
   // Start over only when the pages were saved, not on every refresh: unsaved edits stay.
   useEffect(() => setS(info.settings), [info.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => setHost((h) => (h === "example.com" ? sample : h)), [sample]);
@@ -91,6 +96,18 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
     return parkPage({ pages: { [page.id]: { brand: b, noneEn: page.noneEn ?? null, noneIt: page.noneIt ?? null } }, defaultPage: page.id, assign: {} }, { host: host || "example.com", lang });
   }, [page, brand, host, lang]);
 
+  // Loads an earlier publication in the editor: nothing changes until it is published again.
+  async function loadVersion(v: ParkVersion) {
+    try {
+      const { settings } = await api<{ settings: ParkSettings }>("GET", `/accounts/${acc}/park/versions/${v.id}`);
+      setS({ ...settings, assign: s.assign });
+      setSel(settings.defaultPage);
+      toast.add({ title: t.parking.versionLoaded(v.number), description: t.parking.versionLoadedHint, variant: "success" });
+    } catch (e) {
+      toast.add({ title: t.failed, description: (e as ApiError).message, variant: "error" });
+    }
+  }
+
   function addPage() {
     const id = `p-${Math.random().toString(36).slice(2, 8)}`;
     setS({ ...s, pages: [...s.pages, { id, label: "", brand: NEW_BRAND, noneEn: null, noneIt: null }] });
@@ -99,12 +116,7 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
 
   return (
     <LayerCard>
-      <LayerCard.Secondary className="flex items-center justify-between gap-2">
-        <span>{t.parking.pages}</span>
-        {info.status.published && <DeepLink href={dash.account(acc, "/workers/services/view/dash-plus-plus-park/production")} />}
-      </LayerCard.Secondary>
       <LayerCard.Primary>
-        <p className="mb-4 text-sm text-kumo-subtle">{t.parking.pageDescription}</p>
         <div className="mb-6 flex flex-wrap items-end gap-2">
           <Select
             className="w-72"
@@ -116,6 +128,24 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
           <Button variant="secondary" icon={PlusIcon} onClick={addPage} disabled={s.pages.length >= 20}>
             {t.parking.newPage}
           </Button>
+          {info.status.published && (
+            <DropdownMenu onOpenChange={(o) => o && setVersionsOpen(true)}>
+              <DropdownMenu.Trigger render={(p) => <Button {...p} variant="secondary" icon={ClockCounterClockwiseIcon}>{t.parking.versions}</Button>} />
+              <DropdownMenu.Content align="start">
+                {!versions.data ? (
+                  <DropdownMenu.Item disabled>{t.common.loading}</DropdownMenu.Item>
+                ) : versions.data.versions.length < 2 ? (
+                  <DropdownMenu.Item disabled>{t.parking.noVersions}</DropdownMenu.Item>
+                ) : (
+                  versions.data.versions.slice(1).map((v) => (
+                    <DropdownMenu.Item key={v.id} onClick={() => loadVersion(v)}>
+                      {t.parking.version(v.number, f.ago(v.at), v.by ?? "")}
+                    </DropdownMenu.Item>
+                  ))
+                )}
+              </DropdownMenu.Content>
+            </DropdownMenu>
+          )}
         </div>
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
           <div className="flex flex-col gap-4">
@@ -155,7 +185,7 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
               <p className="text-sm text-kumo-subtle">{t.parking.noBrand}</p>
             ) : (
               <>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid items-start gap-4 sm:grid-cols-2">
                   <Input label={t.parking.brandName} value={brand.name} onChange={(e) => setBrand({ name: e.target.value })} />
                   <Input
                     label={t.parking.brandSite}
@@ -163,7 +193,6 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
                     value={brand.site ?? ""}
                     onChange={(e) => setBrand({ site: e.target.value || null })}
                     onBlur={() => brand.site && siteUrl(brand.site) && setBrand({ site: siteUrl(brand.site) })}
-                    variant={badSite(brand) ? "error" : "default"}
                     error={badSite(brand) ? t.parking.brandSiteInvalid : undefined}
                   />
                 </div>
@@ -174,7 +203,7 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
                     <Input aria-label={t.parking.brandColor} value={brand.accent} onChange={(e) => setBrand({ accent: e.target.value })} className="w-28 font-mono" />
                   </div>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
+                <div className="grid items-start gap-4 sm:grid-cols-2">
                   <ImageField label={t.parking.brandLogo} value={brand.logo} onChange={(logo) => setBrand({ logo })} />
                   <ImageField label={t.parking.brandIcon} value={brand.icon} onChange={(icon) => setBrand({ icon })} />
                 </div>
@@ -182,7 +211,7 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
                 <Input label={t.parking.leadIt} value={brand.leadIt ?? ""} onChange={(e) => setBrand({ leadIt: e.target.value || null })} />
               </>
             )}
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid items-start gap-4 sm:grid-cols-2">
               <Input label={t.parking.noneEn} placeholder={NO_SITE.en} value={page.noneEn ?? ""} onChange={(e) => setPage({ noneEn: e.target.value || null })} />
               <Input label={t.parking.noneIt} placeholder={NO_SITE.it} value={page.noneIt ?? ""} onChange={(e) => setPage({ noneIt: e.target.value || null })} />
             </div>
@@ -205,7 +234,6 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
             <div className="flex flex-wrap items-end gap-3">
               <Input label={t.parking.previewDomain} value={host} onChange={(e) => setHost(e.target.value)} className="w-56" />
               <Tabs
-                size="sm"
                 tabs={[
                   { value: "en", label: "English" },
                   { value: "it", label: "Italiano" },
@@ -245,9 +273,11 @@ export function Parking({ acc }: { acc: string }) {
   const toast = useKumoToastManager();
   const { data, error, reload, syncing, syncAll } = useZones(acc);
   const { park, settings, pageOf, setPageOf, items: pageItems, busy: savingPage } = useParkPages(acc);
-  const initialPage = new URLSearchParams(useLocation().split("?")[1] ?? "").get("page");
+  const query = new URLSearchParams(useLocation().split("?")[1] ?? "");
+  const initialPage = query.get("page");
+  // The page editor opens from the button in the header, or from a link to one of its pages.
+  const editing = query.has("pages") || !!initialPage;
   const { run, busy } = useMutation();
-  const [tab, setTab] = useState<"domains" | "pages">(initialPage ? "pages" : "domains");
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("free");
   const [q, setQ] = useState("");
   const [target, setTarget] = useState<ZoneListItem | null>(null);
@@ -294,17 +324,50 @@ export function Parking({ acc }: { acc: string }) {
 
   return (
     <>
-      <PageHeader title={t.parking.title} description={t.parking.description} actions={tab === "domains" && <SyncButton syncing={syncing} onClick={syncAll} />} />
+      {editing ? (
+        <PageHeader
+          breadcrumbs={
+            <Breadcrumbs size="sm">
+              <Breadcrumbs.Link href={`/${acc}/parking`} icon={<SignpostIcon size={14} />}>
+                {t.parking.title}
+              </Breadcrumbs.Link>
+              <Breadcrumbs.Separator />
+              <Breadcrumbs.Current>{t.parking.pages}</Breadcrumbs.Current>
+            </Breadcrumbs>
+          }
+          title={t.parking.pages}
+          description={t.parking.pageDescription}
+          actions={park.data?.status.published && <DeepLink href={dash.account(acc, "/workers/services/view/dash-plus-plus-park/production")} />}
+        />
+      ) : (
+        <PageHeader
+          title={t.parking.title}
+          description={t.parking.description}
+          actions={
+            <>
+              <SyncButton syncing={syncing} onClick={syncAll} />
+              {park.error?.code !== "forbidden" && (
+                <Button variant="secondary" icon={GearSixIcon} onClick={() => navigate(parkingPagesPath(acc))}>
+                  {t.parking.pages}
+                </Button>
+              )}
+            </>
+          }
+        />
+      )}
       <Container className="flex flex-col gap-6 pt-6">
         {park.error?.code === "forbidden" && <Banner variant="secondary" icon={<InfoIcon weight="fill" />} description={t.parking.noAccess} />}
-        {park.data && <Tabs variant="underline" tabs={(["domains", "pages"] as const).map((v) => ({ value: v, label: t.parking.tabs[v] }))} value={tab} onValueChange={(v) => setTab(v as typeof tab)} />}
-        {tab === "pages" && park.data ? (
+        {editing ? (
+          park.data ? (
           <PageSettings
             key={initialPage ?? ""}
             acc={acc} info={park.data} onSaved={park.reload} sample={data?.zones.find((z) => z.cached?.usage === "parked")?.name ?? "example.com"}
             parked={(data?.zones ?? []).filter(isParked).map((z) => z.name)}
             initialPage={initialPage}
           />
+          ) : park.error ? null : (
+            <Loading />
+          )
         ) : error && !data ? (
           <ErrorState error={error} onRetry={reload} />
         ) : !data ? (
@@ -346,7 +409,7 @@ export function Parking({ acc }: { acc: string }) {
               <Table>
                 <Table.Header>
                   <Table.Row>
-                    {park.data && <Table.CheckHead checked={allSelected} indeterminate={picked.length > 0 && !allSelected} onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(zones.map((z) => z.id)))} aria-label={t.common.all} />}
+                    <Table.CheckHead checked={allSelected} indeterminate={picked.length > 0 && !allSelected} onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(zones.map((z) => z.id)))} aria-label={t.common.all} />
                     <Table.Head>{t.common.domain}</Table.Head>
                     <Table.Head>{t.domains.usage}</Table.Head>
                     {manyPages && <Table.Head>{t.parking.pageColumn}</Table.Head>}
@@ -360,7 +423,7 @@ export function Parking({ acc }: { acc: string }) {
                     const parked = isParked(z);
                     return (
                       <Table.Row key={z.id} className="h-12">
-                        {park.data && <Table.CheckCell checked={selected.has(z.id)} onCheckedChange={() => toggle(z.id)} aria-label={z.name} />}
+                        <Table.CheckCell checked={selected.has(z.id)} onCheckedChange={() => toggle(z.id)} aria-label={z.name} />
                         <Table.Cell>
                           <a href={zonePath(acc, z.name, "parking")} className="font-medium underline decoration-kumo-line underline-offset-4">
                             {z.name}
@@ -383,9 +446,10 @@ export function Parking({ acc }: { acc: string }) {
                           </Table.Cell>
                         )}
                         <Table.Cell className="text-right">
-                          {z.cached?.usage === "empty" && park.data ? (
+                          {z.cached?.usage === "empty" && park.error?.code !== "forbidden" ? (
                             <Button
                               size="sm"
+                              disabled={!park.data}
                               variant="secondary"
                               onClick={() => {
                                 setProtectMail(z.cached?.mail.mode !== "mail");

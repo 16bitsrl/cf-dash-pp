@@ -181,3 +181,11 @@ export async function publishParking(api: CfApi, accountId: string, s: ParkSetti
   // Reachable only through the routes of parked domains.
   await api.req("POST", `/accounts/${accountId}/workers/scripts/${PARK_WORKER}/subdomain`, { enabled: false, previews_enabled: false }).catch(() => {});
 }
+
+/** The settings saved in one version of the parking Worker (as returned with its modules), null if it has none. */
+export function settingsFromVersion(v: { modules?: { name: string; content_base64: string }[] }): ParkSettings | null {
+  const m = v.modules?.find((x) => x.name === SETTINGS_MODULE);
+  if (!m) return null;
+  const json = new TextDecoder().decode(Uint8Array.from(atob(m.content_base64), (c) => c.charCodeAt(0)));
+  return cleanParkSettings((JSON.parse(json) as PublishedSettings).settings);
+}

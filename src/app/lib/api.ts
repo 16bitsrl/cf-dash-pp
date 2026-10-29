@@ -59,6 +59,26 @@ export function setCached(path: string, value: unknown) {
   subs.get(path)?.forEach((f) => f());
 }
 
+export const getCached = <T,>(path: string) => cache.get(path) as T | undefined;
+
+// Reads started by a hover, used by the page that opens next instead of reading again.
+const ahead = new Map<string, { at: number; p: Promise<unknown> }>();
+
+/** Reads a path ahead of time, for instance when the pointer rests on a link. */
+export function prefetch(path: string) {
+  const a = ahead.get(path);
+  if (a && Date.now() - a.at < 15_000) return;
+  const p = api("GET", path).then((v) => setCached(path, v));
+  p.catch(() => ahead.delete(path));
+  ahead.set(path, { at: Date.now(), p });
+}
+
+/** The hover read of this path, if recent. */
+function takeAhead(path: string) {
+  const a = ahead.get(path);
+  return a && Date.now() - a.at < 15_000 ? a.p : null;
+}
+
 export function useApi<T>(path: string | null) {
   const [data, setData] = useState<T | undefined>(() => (path ? (cache.get(path) as T) : undefined));
   const [error, setError] = useState<ApiError | null>(null);
@@ -68,8 +88,7 @@ export function useApi<T>(path: string | null) {
     if (!path) return;
     setLoading(true);
     try {
-      const v = await api<T>("GET", path);
-      setCached(path, v);
+      setCached(path, await api<T>("GET", path));
       setError(null);
     } catch (e) {
       setError(e as ApiError);
@@ -84,7 +103,9 @@ export function useApi<T>(path: string | null) {
     const f = () => setData(cache.get(path) as T);
     if (!subs.has(path)) subs.set(path, new Set());
     subs.get(path)!.add(f);
-    load();
+    const a = takeAhead(path);
+    if (a) a.catch(() => load());
+    else load();
     return () => void subs.get(path)?.delete(f);
   }, [path, load]);
 

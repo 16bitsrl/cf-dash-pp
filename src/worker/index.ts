@@ -7,8 +7,8 @@ import { CfApi, CfError, type Account, type Zone } from "./lib/cf";
 import { ensureSchema, now } from "./lib/db";
 import { dohResolver } from "./lib/doh";
 import type { FixId } from "./lib/mail";
-import type { RedirectInput } from "./lib/zone-state";
-import { cleanParkSettings, type ParkSettings } from "./park/publish";
+import { PARK_WORKER, type RedirectInput } from "./lib/zone-state";
+import { cleanParkSettings, settingsFromVersion, type ParkSettings } from "./park/publish";
 import { ensureParkingPublished, loadParkSettings, saveAndPublish } from "./park/settings";
 import { parkStatus, pool, syncAll, syncZone } from "./services";
 import { disableTenant, enableTenant, isTenant, loadTenants, setSyncToken, tenantTokens, tokenLink, visibleAccounts } from "./tenants";
@@ -453,6 +453,27 @@ api.put("/accounts/:acc/park", async (c) => {
   await saveAndPublish(cf(c), acc, clean, c.get("email"));
   await audit(c, acc, null, null, "park.settings", [{ op: "park.publish" }]);
   return c.json({ ok: true });
+});
+
+type ScriptVersion = { id: string; number: number; metadata: { created_on: string; author_email?: string } };
+
+/** Earlier publications of the parking pages, newest first. */
+api.get("/accounts/:acc/park/versions", async (c) => {
+  const acc = c.req.param("acc");
+  await requirePark(c);
+  const res = await cf(c).req<{ items: ScriptVersion[] }>("GET", `/accounts/${acc}/workers/scripts/${PARK_WORKER}/versions?per_page=20`);
+  return c.json({ versions: res.items.map((v) => ({ id: v.id, number: v.number, at: Date.parse(v.metadata.created_on), by: v.metadata.author_email ?? null })) });
+});
+
+/** The parking pages of one earlier publication, to load them in the editor. */
+api.get("/accounts/:acc/park/versions/:id", async (c) => {
+  const { acc, id } = c.req.param();
+  await requirePark(c);
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Conflict("park-version-empty");
+  const v = await cf(c).req<{ modules?: { name: string; content_base64: string }[] }>("GET", `/accounts/${acc}/workers/workers/${PARK_WORKER}/versions/${id}?include=modules`);
+  const settings = settingsFromVersion(v);
+  if (!settings) throw new Conflict("park-version-empty");
+  return c.json({ settings });
 });
 
 // --- Domain groups (resource groups made of zones) ---

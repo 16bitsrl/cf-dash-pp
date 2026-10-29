@@ -73,10 +73,10 @@ export function Domains({ acc }: { acc: string }) {
           <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center gap-3">
               <SearchBox value={q} onChange={setQ} />
-              {selected.size > 0 && groups.data && (
+              {selected.size > 0 && (
                 <div className="flex items-center gap-3">
                   <span className="text-sm text-kumo-subtle">{t.domains.selected(selected.size)}</span>
-                  <Button variant="secondary" icon={FoldersIcon} onClick={() => setPicking(true)} disabled={!groups.data.groups.length}>
+                  <Button variant="secondary" icon={FoldersIcon} onClick={() => setPicking(true)} disabled={!groups.data?.groups.length}>
                     {t.domains.addToGroup}
                   </Button>
                 </div>
@@ -86,12 +86,12 @@ export function Domains({ acc }: { acc: string }) {
               <Table layout="auto">
                 <Table.Header>
                   <Table.Row>
-                    {groups.data && <Table.CheckHead checked={allSelected} indeterminate={selected.size > 0 && !allSelected} onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(zones.map((z) => z.id)))} aria-label={t.common.all} />}
+                    <Table.CheckHead checked={allSelected} indeterminate={selected.size > 0 && !allSelected} onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(zones.map((z) => z.id)))} aria-label={t.common.all} />
                     <Table.Head>{t.common.domain}</Table.Head>
                     <Table.Head>{t.domains.status}</Table.Head>
                     <Table.Head>{t.domains.usage}</Table.Head>
                     <Table.Head>{t.domains.mail}</Table.Head>
-                    {groups.data && <Table.Head>{t.domains.groups}</Table.Head>}
+                    {!groups.error && <Table.Head>{t.domains.groups}</Table.Head>}
                     <Table.Head>{t.domains.lastChange}</Table.Head>
                     <Table.Head className="w-10">
                       <span className="sr-only">{t.common.actions}</span>
@@ -101,7 +101,7 @@ export function Domains({ acc }: { acc: string }) {
                 <Table.Body>
                   {zones.map((z) => (
                     <Table.Row key={z.id}>
-                      {groups.data && <Table.CheckCell checked={selected.has(z.id)} onCheckedChange={() => toggle(z.id)} aria-label={z.name} />}
+                      <Table.CheckCell checked={selected.has(z.id)} onCheckedChange={() => toggle(z.id)} aria-label={z.name} />
                       <Table.Cell>
                         <a href={zonePath(acc, z.name)} className="font-medium text-kumo-default underline decoration-kumo-line underline-offset-4 hover:decoration-kumo-default">
                           {z.name}
@@ -118,7 +118,7 @@ export function Domains({ acc }: { acc: string }) {
                           <MailBadge mail={z.cached?.mail} />
                         </a>
                       </Table.Cell>
-                      {groups.data && (
+                      {!groups.error && (
                         <Table.Cell>
                           <div className="flex flex-wrap gap-1">
                             {groupsOf(z.id).map((g) => (

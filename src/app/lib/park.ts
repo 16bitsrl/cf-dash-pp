@@ -38,3 +38,4 @@ export function useParkPages(acc: string, enabled = true) {
 }
 
 export const parkingPagePath = (acc: string, page?: string) => `/${acc}/parking${page ? `?page=${encodeURIComponent(page)}` : ""}`;
+export const parkingPagesPath = (acc: string) => `/${acc}/parking?pages`;

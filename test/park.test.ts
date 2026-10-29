@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanParkSettings, fromLegacy, parkFiles, readSettingsModule, settingsModule, siteUrl, type ParkSettings } from "../src/worker/park/publish";
+import { cleanParkSettings, fromLegacy, parkFiles, readSettingsModule, settingsModule, settingsFromVersion, siteUrl, type ParkSettings } from "../src/worker/park/publish";
 
 const brand = { name: "Acme", site: "https://acme.it", accent: "#ff0000", leadEn: null, leadIt: null, logo: null, logoHeight: null, icon: null };
 
@@ -116,5 +116,21 @@ describe("siteUrl", () => {
   it("le impostazioni salvate tengono solo siti validi", () => {
     const s = cleanParkSettings({ pages: [{ id: "a", label: "", brand: { ...brand, site: "acme .it" } }], defaultPage: "a", assign: {} });
     expect(s.pages[0].brand?.site).toBeNull();
+  });
+});
+
+describe("settingsFromVersion", () => {
+  const b64 = (s: string) => btoa(s);
+  const saved = { settings: { pages: [{ id: "a", label: "Acme", brand }], defaultPage: "a", assign: { "x.it": "a" } }, updatedAt: 1, updatedBy: "mt@16bit.it" };
+
+  it("legge le pagine salvate in una pubblicazione", () => {
+    const s = settingsFromVersion({ modules: [{ name: "worker.js", content_base64: b64("x") }, { name: "settings.json", content_base64: b64(JSON.stringify(saved)) }] });
+    expect(s?.pages.map((p) => p.label)).toEqual(["Acme"]);
+    expect(s?.defaultPage).toBe("a");
+  });
+
+  it("null per le pubblicazioni senza pagine salvate", () => {
+    expect(settingsFromVersion({ modules: [{ name: "worker.js", content_base64: b64("x") }] })).toBeNull();
+    expect(settingsFromVersion({})).toBeNull();
   });
 });

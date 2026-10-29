@@ -8,6 +8,7 @@ import { Shell } from "./components/Shell";
 import { Container, ErrorState, Loading } from "./components/ui";
 import { errorText, useT } from "./i18n";
 import { useApi, useLoginNeeded, type Me } from "./lib/api";
+import { useZonePrefetch } from "./lib/hooks";
 import { navigate, parseRoute, useLinkInterception, useLocation } from "./lib/router";
 import { Activity } from "./pages/Activity";
 import { Domains } from "./pages/Domains";
@@ -75,6 +76,7 @@ function Login() {
 
 function App() {
   useLinkInterception();
+  useZonePrefetch();
   const t = useT();
   const path = useLocation();
   const loginNeeded = useLoginNeeded();

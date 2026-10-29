@@ -1,7 +1,8 @@
 import { useKumoToastManager } from "@cloudflare/kumo";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { doneText, useT } from "../i18n";
-import { api, ApiError, setCached, useApi, type Done, type Mutation, type ZoneList } from "./api";
+import { api, ApiError, getCached, prefetch, setCached, useApi, type Done, type Mutation, type ZoneList } from "./api";
+import { parseRoute } from "./router";
 
 /** Domains of the account. If some were never read, reads them right away with the user's token. */
 export function useZones(acc: string) {
@@ -72,4 +73,29 @@ export function useMutation() {
       [run],
     ),
   };
+}
+
+/** Reads a domain ahead of time when the pointer rests on a link to it, so its page opens right away. */
+export function useZonePrefetch() {
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onOver = (e: PointerEvent) => {
+      clearTimeout(timer);
+      const a = (e.target as Element).closest?.("a");
+      if (!a) return;
+      const url = new URL(a.href, location.href);
+      const r = parseRoute(url.pathname);
+      if (url.origin !== location.origin || r.page !== "zone" || location.pathname.startsWith(`/${r.acc}/${r.zone}`)) return;
+      const id = getCached<ZoneList>(`/accounts/${r.acc}/zones`)?.zones.find((z) => z.name === r.zone)?.id;
+      if (id) timer = setTimeout(() => prefetch(`/zones/${id}`), 100);
+    };
+    const onOut = () => clearTimeout(timer);
+    document.addEventListener("pointerover", onOver);
+    document.addEventListener("pointerout", onOut);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("pointerover", onOver);
+      document.removeEventListener("pointerout", onOut);
+    };
+  }, []);
 }
