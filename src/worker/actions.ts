@@ -3,9 +3,9 @@
 // Errors and results are codes with params; the client turns them into text.
 
 import type { CfApi } from "./lib/cf";
-import type { FixId, MailReport } from "./lib/mail";
-import { txtValue } from "./lib/mail";
-import { dmarcValue, MX_PRESET_INCLUDE, mxPreset, proposeSpf, SENDERS, type MxPreset } from "./lib/senders";
+import type { FixId, MailReport, NameReport } from "./lib/mail";
+import { reportFor, txtValue } from "./lib/mail";
+import { dmarcTags, dmarcValue, MX_PRESET_INCLUDE, mxPreset, proposeSpf, SENDERS, type MxPreset } from "./lib/senders";
 import { isParkScript, isWholeDomain, PARK_ADDRESS, PARK_WORKER, redirectHosts, redirectRule, routeCovers, type Rec, type Redirect, type RedirectInput } from "./lib/zone-state";
 import { REDIRECT_PHASE, type ZoneData } from "./services";
 
@@ -186,6 +186,11 @@ async function upsertTxt(api: CfApi, data: ZoneData, name: string, match: RegExp
   return { op: "record.add", name, value };
 }
 
+/**
+ * The domain neither receives nor sends: null MX, SPF "-all" and DMARC "reject", also for the
+ * subdomains (sp= and, if the zone has no wildcard records yet, a wildcard SPF for the names that
+ * don't exist). Other DMARC tags, like the report address, are kept.
+ */
 async function protectNoMail(api: CfApi, data: ZoneData, mail: MailReport) {
   if (mail.mode === "mail") throw new Conflict("receives-mail");
   const z = lower(data.zone.name);
@@ -194,17 +199,48 @@ async function protectNoMail(api: CfApi, data: ZoneData, mail: MailReport) {
     await createRecord(api, data.zone.id, { type: "MX", name: z, content: ".", priority: 0 });
     done.push({ op: "record.add", name: z, value: "MX ." });
   }
-  for (const d of [await upsertTxt(api, data, z, /^v=spf1(\s|$)/i, "v=spf1 -all"), await upsertTxt(api, data, `_dmarc.${z}`, /^v=DMARC1/i, "v=DMARC1; p=reject;")]) if (d) done.push(d);
+  const dmarc = mail.records.dmarc.length === 1 ? mail.records.dmarc[0] : undefined;
+  const dmarcNew = dmarc ? dmarcValue(dmarc, { policy: "reject", ...(dmarcTags(dmarc).sp && { sp: "reject" }) }) : "v=DMARC1; p=reject;";
+  for (const d of [await upsertTxt(api, data, z, /^v=spf1(\s|$)/i, "v=spf1 -all"), await upsertTxt(api, data, `_dmarc.${z}`, /^v=DMARC1/i, dmarcNew)]) if (d) done.push(d);
+  if (!data.records.some((r) => lower(r.name) === `*.${z}`)) {
+    await createRecord(api, data.zone.id, { type: "TXT", name: `*.${z}`, content: quote("v=spf1 -all") });
+    done.push({ op: "record.add", name: `*.${z}`, value: "v=spf1 -all" });
+  }
   return done;
+}
+
+/** A subdomain that neither receives nor sends: null MX and SPF "-all"; its own DMARC, if any, to reject. */
+async function protectSubdomain(api: CfApi, data: ZoneData, mail: NameReport) {
+  if (mail.mode === "mail") throw new Conflict("receives-mail");
+  const n = mail.name;
+  const done: Done[] = [];
+  if (!mail.records.mx.length) {
+    await createRecord(api, data.zone.id, { type: "MX", name: n, content: ".", priority: 0 });
+    done.push({ op: "record.add", name: n, value: "MX ." });
+  }
+  const spf = await upsertTxt(api, data, n, /^v=spf1(\s|$)/i, "v=spf1 -all");
+  if (spf) done.push(spf);
+  if (mail.records.dmarc.length === 1) {
+    const d = await upsertTxt(api, data, `_dmarc.${n}`, /^v=DMARC1/i, dmarcValue(mail.records.dmarc[0], { policy: "reject" }));
+    if (d) done.push(d);
+  }
+  return done;
+}
+
+/** The name mail records go on: the apex, or a subdomain that isn't technical or a wildcard. */
+function mailName(data: ZoneData, name?: string) {
+  const z = lower(data.zone.name);
+  const n = lower((name ?? "").trim() || z);
+  if (n !== z && (!n.endsWith(`.${z}`) || /^[_*]/.test(n) || n.split(".").some((l) => l.startsWith("_")))) throw new Conflict("name-invalid", { zone: z });
+  return n;
 }
 
 export type FixOptions = { policy?: "none" | "quarantine" | "reject"; rua?: string; include?: string };
 
-const isSpf = (r: Rec, z: string) => r.type === "TXT" && lower(r.name) === z && /^v=spf1(\s|$)/i.test(txtValue(r.content));
+const isSpf = (r: Rec, n: string) => r.type === "TXT" && lower(r.name) === n && /^v=spf1(\s|$)/i.test(txtValue(r.content));
 
-/** Leaves exactly one SPF record with this value. */
-async function writeSpf(api: CfApi, data: ZoneData, value: string): Promise<Done[]> {
-  const z = lower(data.zone.name);
+/** Leaves exactly one SPF record with this value on the name. */
+async function writeSpf(api: CfApi, data: ZoneData, value: string, z: string): Promise<Done[]> {
   const existing = data.records.filter((r) => isSpf(r, z));
   const done: Done[] = [];
   if (!existing.length) {
@@ -222,15 +258,16 @@ async function writeSpf(api: CfApi, data: ZoneData, value: string): Promise<Done
   return done;
 }
 
-export async function setSpf(api: CfApi, data: ZoneData, value: string) {
+export async function setSpf(api: CfApi, data: ZoneData, value: string, name?: string) {
+  const z = mailName(data, name);
   const v = value.trim().replace(/\s+/g, " ");
   if (!/^v=spf1(\s|$)/i.test(v) || v.length > 450 || /"/.test(v)) throw new Conflict("spf-invalid");
-  return writeSpf(api, data, v);
+  return writeSpf(api, data, v, z);
 }
 
-/** Replaces the MX records of the apex with those of a provider, and optionally adds it to SPF. */
-export async function setMx(api: CfApi, data: ZoneData, preset: MxPreset, updateSpf: boolean) {
-  const z = lower(data.zone.name);
+/** Replaces the MX records of a name with those of a provider, and optionally adds it to SPF. */
+export async function setMx(api: CfApi, data: ZoneData, preset: MxPreset, updateSpf: boolean, name?: string) {
+  const z = mailName(data, name);
   const target = mxPreset(preset, z);
   const current = data.records.filter((r) => r.type === "MX" && lower(r.name) === z);
   const done: Done[] = [];
@@ -247,20 +284,21 @@ export async function setMx(api: CfApi, data: ZoneData, preset: MxPreset, update
   if (updateSpf) {
     const spf = data.records.filter((r) => isSpf(r, z)).map((r) => txtValue(r.content));
     const include = MX_PRESET_INCLUDE[preset];
-    if (preset === "none") done.push(...(await writeSpf(api, data, "v=spf1 -all")));
+    if (preset === "none") done.push(...(await writeSpf(api, data, "v=spf1 -all", z)));
     else if (include) {
       // Mail moves away from the previous provider: it no longer needs to be in SPF.
       const previous = SENDERS.filter((d) => d.mx && d.include && d.include !== include && current.some((r) => d.mx!.test(lower(r.content)))).map((d) => d.include!);
-      done.push(...(await writeSpf(api, data, proposeSpf(spf, [include], previous))));
+      done.push(...(await writeSpf(api, data, proposeSpf(spf, [include], previous), z)));
     }
   }
   return done;
 }
 
-export async function setDmarc(api: CfApi, data: ZoneData, change: { policy: "none" | "quarantine" | "reject"; rua?: string }) {
+export async function setDmarc(api: CfApi, data: ZoneData, change: { policy: "none" | "quarantine" | "reject"; rua?: string }, target?: string) {
+  const n = mailName(data, target);
   if (!["none", "quarantine", "reject"].includes(change.policy)) throw new Conflict("dmarc-invalid-policy");
   if (change.rua && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(change.rua)) throw new Conflict("rua-invalid");
-  const name = `_dmarc.${lower(data.zone.name)}`;
+  const name = `_dmarc.${n}`;
   const existing = data.records.filter((r) => r.type === "TXT" && lower(r.name) === name && /^v=DMARC1/i.test(txtValue(r.content)));
   if (existing.length > 1) throw new Conflict("duplicate-records", { name, count: existing.length });
   const value = dmarcValue(existing[0] ? txtValue(existing[0].content) : undefined, change);
@@ -268,9 +306,11 @@ export async function setDmarc(api: CfApi, data: ZoneData, change: { policy: "no
   return d ? [d] : [];
 }
 
-export async function applyMailFix(api: CfApi, data: ZoneData, mail: MailReport, fix: FixId, opts: FixOptions): Promise<Done[]> {
-  const z = lower(data.zone.name);
-  if (fix === "protect-no-mail") return protectNoMail(api, data, mail);
+export async function applyMailFix(api: CfApi, data: ZoneData, report: MailReport, fix: FixId, opts: FixOptions, name?: string): Promise<Done[]> {
+  const z = mailName(data, name);
+  const mail = reportFor(report, z);
+  if (!mail) throw new Conflict("name-invalid", { zone: lower(data.zone.name) });
+  if (fix === "protect-no-mail") return z === lower(data.zone.name) ? protectNoMail(api, data, report) : protectSubdomain(api, data, mail);
   if (fix === "add-dmarc") {
     if (mail.records.dmarc.length) throw new Conflict("dmarc-exists");
     const policy = opts.policy && ["none", "quarantine", "reject"].includes(opts.policy) ? opts.policy : "none";
@@ -282,7 +322,7 @@ export async function applyMailFix(api: CfApi, data: ZoneData, mail: MailReport,
   if (fix === "add-spf-include") {
     const include = String(opts.include ?? "").trim().toLowerCase();
     if (!/^[a-z0-9._-]+\.[a-z]{2,}$/.test(include)) throw new Conflict("spf-invalid");
-    return writeSpf(api, data, proposeSpf(mail.records.spf, [include]));
+    return writeSpf(api, data, proposeSpf(mail.records.spf, [include]), z);
   }
   if (fix === "add-spf") {
     if (mail.records.spf.length) throw new Conflict("spf-exists");

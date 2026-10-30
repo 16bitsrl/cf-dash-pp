@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Container, EmptyState, ErrorState, LevelIcon, Loading, MailBadge, PageHeader, TableCard } from "../components/ui";
 import { checkText, useT } from "../i18n";
 import type { CachedZone } from "../lib/api";
+import { shortName } from "../lib/format";
 import { useZones } from "../lib/hooks";
 import { zonePath } from "../lib/router";
 import { SearchBox, SyncButton, useFilter } from "./Domains";
@@ -69,7 +70,10 @@ export function Mail({ acc }: { acc: string }) {
                             {checks.slice(0, 3).map((c, i) => (
                               <li key={i} className="flex items-center gap-2">
                                 <LevelIcon level={c.level} size={16} />
-                                {checkText(t, c).title}
+                                <span>
+                                  {c.name && <span className="font-mono text-xs text-kumo-subtle">{shortName(c.name, z.name)} · </span>}
+                                  {checkText(t, c).title}
+                                </span>
                               </li>
                             ))}
                             {checks.length > 3 && <li className="pl-6 text-kumo-subtle">{t.mail.more(checks.length - 3)}</li>}

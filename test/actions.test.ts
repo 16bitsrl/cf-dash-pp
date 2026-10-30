@@ -61,7 +61,7 @@ describe("parcheggio", () => {
     expect(f.data().parking.state).toBe("parked");
     const m = await mail(f);
     expect(m.mode).toBe("protected");
-    expect(m.records.dmarc).toEqual(["v=DMARC1; p=reject;"]);
+    expect(m.records.dmarc).toEqual(["v=DMARC1; p=reject"]);
     expect(f.records.filter((r) => r.type === "TXT" && r.name === `_dmarc.${Z}`)).toHaveLength(1);
 
     // Rifarlo non cambia nulla.
@@ -241,5 +241,77 @@ describe("strumenti posta", () => {
     f.records.push({ id: "d", type: "TXT", name: `_dmarc.${Z}`, content: '"v=DMARC1; p=none; rua=mailto:r@cf.net"' });
     await setDmarc(api(f), f.data(), { policy: "reject" });
     expect((await mail(f)).records.dmarc).toEqual(["v=DMARC1; p=reject; rua=mailto:r@cf.net"]);
+  });
+});
+
+describe("posta dei sottodomini", () => {
+  const S = `send.${Z}`;
+
+  it("imposta SPF, MX e DMARC di un sottodominio senza toccare il dominio principale", async () => {
+    const f = new FakeCf();
+    f.records.push({ id: "spf", type: "TXT", name: Z, content: '"v=spf1 include:_spf.google.com ~all"' }, { id: "s2", type: "TXT", name: S, content: '"v=spf1 include:amazonses.com ~all"' });
+    await setSpf(api(f), f.data(), "v=spf1 include:amazonses.com -all", S);
+    await setMx(api(f), f.data(), "none", false, S);
+    await setDmarc(api(f), f.data(), { policy: "reject" }, S);
+    const m = await mail(f);
+    expect(m.records.spf).toEqual(["v=spf1 include:_spf.google.com ~all"]);
+    expect(m.records.dmarc).toEqual([]);
+    const s = m.subdomains.find((x) => x.name === S)!;
+    expect(s.records.spf).toEqual(["v=spf1 include:amazonses.com -all"]);
+    expect(s.records.mx).toEqual([{ host: "", priority: 0 }]);
+    expect(s.records.dmarc).toEqual(["v=DMARC1; p=reject"]);
+  });
+
+  it("applica le correzioni al sottodominio indicato", async () => {
+    const f = new FakeCf();
+    f.records.push({ id: "mx", type: "MX", name: S, content: "smtp.google.com", priority: 1 });
+    await applyMailFix(api(f), f.data(), await mail(f), "add-spf", {}, S);
+    const m = await mail(f);
+    expect(m.records.spf).toEqual([]);
+    expect(m.subdomains.find((x) => x.name === S)!.records.spf).toEqual(["v=spf1 include:_spf.google.com ~all"]);
+  });
+
+  it("rifiuta nomi fuori dal dominio, tecnici o jolly", async () => {
+    const f = new FakeCf();
+    for (const name of ["altro.it", `_spf.${Z}`, `*.${Z}`, `a._domainkey.${Z}`]) {
+      await expect(setSpf(api(f), f.data(), "v=spf1 -all", name)).rejects.toMatchObject({ code: "name-invalid" });
+    }
+  });
+
+  it("proteggendo il dominio copre anche i sottodomini e tiene l'indirizzo dei report", async () => {
+    const f = new FakeCf();
+    f.records.push({ id: "d", type: "TXT", name: `_dmarc.${Z}`, content: '"v=DMARC1; p=none; sp=none; rua=mailto:r@cf.net"' });
+    await applyMailFix(api(f), f.data(), await mail(f), "protect-no-mail", {});
+    const m = await mail(f);
+    expect(m.mode).toBe("protected");
+    expect(m.records.dmarc).toEqual(["v=DMARC1; p=reject; sp=reject; rua=mailto:r@cf.net"]);
+    expect(f.records.filter((r) => r.name === `*.${Z}`).map((r) => r.content)).toEqual(['"v=spf1 -all"']);
+    expect(m.checks.map((c) => c.id)).not.toContain("subs-unprotected");
+  });
+
+  it("protegge un sottodominio senza posta senza toccare il dominio principale", async () => {
+    const f = new FakeCf();
+    f.records.push({ id: "spf", type: "TXT", name: Z, content: '"v=spf1 include:_spf.google.com ~all"' }, { id: "mx", type: "MX", name: `news.${Z}`, content: ".", priority: 0 });
+    const before = await mail(f);
+    expect(before.subdomains[0].checks.find((c) => c.fix === "protect-no-mail")).toBeTruthy();
+    await applyMailFix(api(f), f.data(), before, "protect-no-mail", {}, `news.${Z}`);
+    const m = await mail(f);
+    expect(m.records.spf).toEqual(["v=spf1 include:_spf.google.com ~all"]);
+    expect(m.subdomains.find((x) => x.name === `news.${Z}`)!.mode).toBe("protected");
+    expect(f.records.some((r) => r.name.startsWith("*"))).toBe(false);
+  });
+
+  it("non protegge un sottodominio che riceve posta", async () => {
+    const f = new FakeCf();
+    f.records.push({ id: "mx", type: "MX", name: S, content: "smtp.google.com", priority: 1 });
+    await expect(applyMailFix(api(f), f.data(), await mail(f), "protect-no-mail", {}, S)).rejects.toMatchObject({ code: "receives-mail" });
+  });
+
+  it("non aggiunge il jolly se il dominio ha già record jolly", async () => {
+    const f = new FakeCf();
+    f.records.push({ id: "w", type: "A", name: `*.${Z}`, content: "192.0.2.1", proxied: true });
+    const done = await applyMailFix(api(f), f.data(), await mail(f), "protect-no-mail", {});
+    expect(f.records.filter((r) => r.name === `*.${Z}`)).toHaveLength(1);
+    expect(done.some((d) => d.name === `*.${Z}`)).toBe(false);
   });
 });

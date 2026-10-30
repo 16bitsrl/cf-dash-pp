@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { analyzeMail, type DnsRecord, type Resolver } from "../src/worker/lib/mail";
+import { analyzeMail, type DnsRecord, type NameReport, type Resolver } from "../src/worker/lib/mail";
 
 const Z = "esempio.it";
 const rec = (type: string, name: string, content: string, extra: Partial<DnsRecord> = {}): DnsRecord => ({
@@ -16,7 +16,7 @@ const fakeResolver = (answers: Record<string, string[]> = {}): Resolver => ({
   },
 });
 
-const ids = (r: Awaited<ReturnType<typeof analyzeMail>>, level?: string) =>
+const ids = (r: NameReport, level?: string) =>
   r.checks.filter((c) => !level || c.level === level).map((c) => c.id);
 
 describe("analyzeMail", () => {
@@ -201,5 +201,127 @@ describe("analyzeMail", () => {
     );
     expect(ids(r, "warning")).toContain("mx-google-mixed");
     expect(ids(r)).not.toContain("mx-google-legacy");
+  });
+});
+
+describe("sottodomini", () => {
+  const sub = (r: Awaited<ReturnType<typeof analyzeMail>>, name: string) => r.subdomains.find((s) => s.name === `${name}.${Z}`)!;
+
+  it("analizza a parte il sottodominio di un servizio di invio, senza falsi allarmi", async () => {
+    const r = await analyzeMail(
+      Z,
+      [
+        rec("MX", "@", "smtp.google.com", { priority: 1 }),
+        rec("TXT", "@", '"v=spf1 include:_spf.google.com ~all"'),
+        rec("TXT", "google._domainkey", '"v=DKIM1; k=rsa; p=' + "A".repeat(392) + '"'),
+        rec("TXT", "resend._domainkey", '"v=DKIM1; k=rsa; p=' + "A".repeat(216) + '"'),
+        rec("TXT", "_dmarc", '"v=DMARC1; p=quarantine; rua=mailto:d@esempio.it"'),
+        rec("MX", "send", "feedback-smtp.eu-west-1.amazonses.com", { priority: 10 }),
+        rec("TXT", "send", '"v=spf1 include:amazonses.com ~all"'),
+      ],
+      fakeResolver({ "A smtp.google.com": ["1.1.1.1"], "A feedback-smtp.eu-west-1.amazonses.com": ["1.1.1.1"] }),
+    );
+    expect(r.subdomains.map((s) => s.name)).toEqual([`send.${Z}`]);
+    const s = sub(r, "send");
+    expect(s.mode).toBe("mail");
+    expect(s.senders.map((x) => x.id)).toEqual(["amazonses"]);
+    expect(ids(s, "error")).toEqual([]);
+    expect(ids(s, "warning")).toEqual([]);
+    expect(s.checks.find((c) => c.id === "dmarc-inherited")).toMatchObject({ level: "ok", params: { policy: "quarantine" } });
+    expect(s.checks.every((c) => c.name === `send.${Z}`)).toBe(true);
+    // Il dominio principale non vede i record del sottodominio.
+    expect(r.senders.map((x) => x.id)).toEqual(["google"]);
+    expect(r.records.mx.map((m) => m.host)).toEqual(["smtp.google.com"]);
+  });
+
+  it("segnala i problemi di un sottodominio e li conta nel totale", async () => {
+    const r = await analyzeMail(
+      Z,
+      [
+        rec("MX", "@", ".", { priority: 0 }),
+        rec("TXT", "@", '"v=spf1 -all"'),
+        rec("TXT", "_dmarc", '"v=DMARC1; p=reject;"'),
+        rec("MX", "lists", "mx.esempio.it", { priority: 10 }),
+        rec("TXT", "lists", '"v=spf1 mx -all"'),
+        rec("TXT", "lists", '"v=spf1 a -all"'),
+      ],
+      fakeResolver(),
+    );
+    const s = sub(r, "lists");
+    expect(ids(s, "error")).toEqual(expect.arrayContaining(["mx-missing", "spf-multiple"]));
+    expect(r.score.errors).toBe(0);
+    expect(r.total.errors).toBe(s.score.errors);
+  });
+
+  it("trova i sottodomini anche solo da DMARC o DKIM, ignora nomi tecnici e jolly", async () => {
+    const r = await analyzeMail(
+      Z,
+      [
+        rec("TXT", "_dmarc", '"v=DMARC1; p=reject; sp=none"'),
+        rec("TXT", "_dmarc.news", '"v=DMARC1; p=none"'),
+        rec("TXT", "s1._domainkey.mkt", '"v=DKIM1; k=rsa; p=' + "A".repeat(392) + '"'),
+        rec("TXT", "_spf", '"v=spf1 ip4:192.0.2.1 -all"'),
+        rec("TXT", "*", '"v=spf1 -all"'),
+      ],
+      fakeResolver(),
+    );
+    expect(r.subdomains.map((s) => s.name)).toEqual([`mkt.${Z}`, `news.${Z}`]);
+    expect(ids(sub(r, "news"), "warning")).toContain("dmarc-none");
+    expect(sub(r, "mkt").checks.find((c) => c.id === "dmarc-inherited")).toMatchObject({ level: "info", params: { policy: "none" } });
+    expect(sub(r, "mkt").records.dkim.map((d) => d.selector)).toEqual(["s1"]);
+  });
+
+  it("riconosce la PEC di Aruba su un sottodominio", async () => {
+    const r = await analyzeMail(
+      Z,
+      [rec("MX", "@", "smtp.google.com", { priority: 1 }), rec("TXT", "@", '"v=spf1 include:_spf.google.com ~all"'), rec("TXT", "_dmarc", '"v=DMARC1; p=reject"'), rec("MX", "pec", "mx.pec.aruba.it", { priority: 10 }), rec("TXT", "pec", '"v=spf1 include:pec.aruba.it -all"')],
+      fakeResolver({ "A smtp.google.com": ["1.1.1.1"], "A mx.pec.aruba.it": ["1.1.1.1"] }),
+    );
+    const s = sub(r, "pec");
+    expect(s.provider?.name).toBe("Aruba PEC");
+    expect(s.senders.map((x) => x.id)).toEqual(["arubapec"]);
+    expect(ids(s, "warning")).toEqual([]);
+  });
+
+  it("su un sottodominio che riceve, l'SPF mancante è un avviso", async () => {
+    const r = await analyzeMail(Z, [rec("MX", "app", "mx1.forwardemail.net", { priority: 10 })], fakeResolver({ "A mx1.forwardemail.net": ["1.1.1.1"] }));
+    expect(sub(r, "app").checks.find((c) => c.id === "spf-missing")?.level).toBe("warning");
+  });
+
+  it("segnala un sottodominio senza DMARC proprio né ereditabile", async () => {
+    const r = await analyzeMail(Z, [rec("MX", "pec", "mx.pec.aruba.it", { priority: 10 }), rec("TXT", "pec", '"v=spf1 include:pec.aruba.it -all"')], fakeResolver({ "A mx.pec.aruba.it": ["1.1.1.1"] }));
+    expect(sub(r, "pec").checks.find((c) => c.id === "dmarc-missing")).toMatchObject({ level: "warning", fix: "add-dmarc" });
+  });
+
+  it("non eredita da un DMARC con criterio non valido", async () => {
+    const r = await analyzeMail(Z, [rec("TXT", "_dmarc", '"v=DMARC1; p=invalid; sp=reject"'), rec("TXT", "send", '"v=spf1 include:amazonses.com -all"')], fakeResolver());
+    expect(ids(sub(r, "send"))).not.toContain("dmarc-inherited");
+    expect(ids(sub(r, "send"), "warning")).toContain("dmarc-missing");
+  });
+
+  it("eredita dal dominio intermedio che si dichiara dominio di riferimento (psd=n)", async () => {
+    const r = await analyzeMail(
+      Z,
+      [rec("TXT", "_dmarc", '"v=DMARC1; p=reject"'), rec("TXT", "_dmarc.team", '"v=DMARC1; p=none; sp=none; psd=n"'), rec("TXT", "send.team", '"v=spf1 include:amazonses.com -all"')],
+      fakeResolver(),
+    );
+    expect(sub(r, "send.team").checks.find((c) => c.id === "dmarc-inherited")).toMatchObject({ params: { policy: "none", from: `team.${Z}` } });
+  });
+
+  it("senza psd=n segue il DMARC del dominio principale anche sotto un intermedio", async () => {
+    const r = await analyzeMail(Z, [rec("TXT", "_dmarc", '"v=DMARC1; p=reject"'), rec("TXT", "_dmarc.team", '"v=DMARC1; p=none"'), rec("TXT", "send.team", '"v=spf1 -all"')], fakeResolver());
+    expect(sub(r, "send.team").checks.find((c) => c.id === "dmarc-inherited")).toMatchObject({ params: { policy: "reject", from: Z } });
+  });
+
+  it("su un dominio protetto segnala i sottodomini scoperti", async () => {
+    const base = [rec("MX", "@", ".", { priority: 0 }), rec("TXT", "@", '"v=spf1 -all"')];
+    const open = await analyzeMail(Z, [...base, rec("TXT", "_dmarc", '"v=DMARC1; p=reject; sp=none"')], fakeResolver());
+    expect(open.mode).toBe("protected");
+    expect(open.checks.find((c) => c.id === "subs-unprotected")?.fix).toBe("protect-no-mail");
+    expect(open.checks.find((c) => c.id === "dmarc-sp-weak")?.fix).toBe("protect-no-mail");
+
+    const closed = await analyzeMail(Z, [...base, rec("TXT", "_dmarc", '"v=DMARC1; p=reject;"'), rec("TXT", "*", '"v=spf1 -all"')], fakeResolver());
+    expect(ids(closed)).not.toContain("subs-unprotected");
+    expect(ids(closed)).not.toContain("dmarc-sp-weak");
   });
 });

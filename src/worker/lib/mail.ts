@@ -1,4 +1,5 @@
-// Mail analysis for a zone: MX, SPF, DKIM, DMARC and anomalies.
+// Mail analysis for a zone: MX, SPF, DKIM, DMARC and anomalies, for the apex and for each
+// subdomain that has mail records of its own.
 // Starts from the zone records (authoritative, read from the API) and uses public DNS only
 // for names outside the zone: SPF includes and external MX hosts.
 // Checks carry an id and params; the client turns them into text in the user's language.
@@ -25,11 +26,13 @@ export type Area = "mx" | "spf" | "dkim" | "dmarc" | "other";
 export type FixId = "protect-no-mail" | "add-dmarc" | "add-spf" | "add-spf-include" | "google-mx";
 
 export type CheckParams = Record<string, string | number>;
-export type Check = { id: string; level: Level; area: Area; params?: CheckParams; fix?: FixId };
+// name: the subdomain the check is about; missing for the apex.
+export type Check = { id: string; level: Level; area: Area; params?: CheckParams; fix?: FixId; name?: string };
 
 export type Provider = { id: string; name: string; spf?: string; dkim?: string[] };
 
-export type MailReport = {
+export type NameReport = {
+  name: string;
   mode: "mail" | "none" | "protected";
   provider: Provider | null;
   records: {
@@ -44,6 +47,9 @@ export type MailReport = {
   score: { errors: number; warnings: number };
 };
 
+// The apex, plus the subdomains with mail records; total counts the problems of all of them.
+export type MailReport = NameReport & { subdomains: NameReport[]; total: { errors: number; warnings: number } };
+
 // spfOk: the includes that count as the provider's, when there is more than one; spfFor: the one
 // to propose, from the MX in use.
 const PROVIDERS: (Provider & { mx: RegExp; spfOk?: RegExp; spfFor?: (mx: string) => string })[] = [
@@ -56,6 +62,8 @@ const PROVIDERS: (Provider & { mx: RegExp; spfOk?: RegExp; spfFor?: (mx: string)
   { id: "fastmail", name: "Fastmail", mx: /\.messagingengine\.com$/, spf: "spf.messagingengine.com", dkim: ["fm1", "fm2", "fm3"] },
   { id: "icloud", name: "iCloud Mail", mx: /\.mail\.icloud\.com$/, spf: "icloud.com", dkim: ["sig1"] },
   { id: "ovh", name: "OVHcloud", mx: /\.(ovh\.net|ovh\.com)$/, spf: "mx.ovh.com" },
+  // Certified email (PEC) has its own servers and SPF; it usually sits on a "pec." subdomain.
+  { id: "arubapec", name: "Aruba PEC", mx: /\.pec\.aruba\.it$/, spf: "pec.aruba.it" },
   { id: "aruba", name: "Aruba", mx: /(^|\.)aruba\.it$/, spf: "_spf.aruba.it" },
   { id: "register", name: "Register.it", mx: /(^|\.)register\.it$/, spf: "spf.register.it" },
   { id: "qboxmail", name: "Qboxmail", mx: QBOX_MX, spf: "spf.qboxmail.com", spfOk: QBOX_SPF, spfFor: (mx) => `spf.${mx.match(QBOX_WHITE_LABEL)?.[1] ?? "qboxmail.com"}` },
@@ -109,11 +117,75 @@ async function countSpfLookups(spf: string, resolver: Resolver, seen = new Set<s
   return count;
 }
 
-export async function analyzeMail(zone: string, records: DnsRecord[], resolver: Resolver): Promise<MailReport> {
+const isSpfValue = (t: string) => /^v=spf1(\s|$)/i.test(t);
+
+/**
+ * Subdomains with mail records of their own: MX, SPF, DMARC or DKIM keys. Technical names
+ * (first label starting with "_", like an SPF include target) and wildcards are left out.
+ */
+export function mailSubdomains(zone: string, records: DnsRecord[]): string[] {
   const z = lower(zone);
-  const at = (name: string) => lower(name) === z;
+  const out = new Set<string>();
+  for (const r of records) {
+    const n = lower(r.name);
+    let owner: string | null = null;
+    if (r.type === "MX" || (r.type === "TXT" && isSpfValue(txtValue(r.content)))) owner = n;
+    else if (r.type === "TXT" && n.startsWith("_dmarc.") && /^v=DMARC1/i.test(txtValue(r.content))) owner = n.slice("_dmarc.".length);
+    else if ((r.type === "TXT" || r.type === "CNAME") && n.includes("._domainkey.")) owner = n.slice(n.indexOf("._domainkey.") + "._domainkey.".length);
+    if (owner && owner.endsWith(`.${z}`) && !/^[_*]/.test(owner)) out.add(owner);
+  }
+  return [...out].sort();
+}
+
+/** The report of one name of the zone: the apex or one of its subdomains. */
+export function reportFor(mail: MailReport, name?: string): NameReport | undefined {
+  const n = lower(name || mail.name);
+  return n === mail.name ? mail : mail.subdomains.find((s) => s.name === n);
+}
+
+const POLICIES = ["none", "quarantine", "reject"];
+
+/** The DMARC tags published on a name, when there is exactly one record with a valid policy. */
+function dmarcAt(name: string, records: DnsRecord[]) {
+  const found = records.filter((r) => r.type === "TXT" && lower(r.name) === `_dmarc.${name}`).map((r) => txtValue(r.content)).filter((t) => /^v=DMARC1/i.test(t));
+  const tags = found.length === 1 ? parseTags(found[0]) : null;
+  return tags && POLICIES.includes(tags.p?.toLowerCase() ?? "") ? tags : null;
+}
+
+/**
+ * The policy a subdomain without its own DMARC follows, looking at the names above it inside the
+ * zone. A name that declares itself the reference domain (psd=n) wins; otherwise the topmost
+ * record, normally the apex. Its sp= applies, or p= when missing.
+ */
+function inheritedDmarc(zone: string, name: string, records: DnsRecord[]): { policy: string; from: string } | null {
+  const above: string[] = [];
+  for (let n = name.slice(name.indexOf(".") + 1); n.endsWith(zone); n = n.slice(n.indexOf(".") + 1)) {
+    above.push(n);
+    if (n === zone) break;
+  }
+  const found = above.map((n) => ({ n, tags: dmarcAt(n, records) })).filter((x) => x.tags);
+  const ref = found.find((x) => x.tags!.psd?.toLowerCase() === "n") ?? found.at(-1);
+  if (!ref) return null;
+  const policy = (ref.tags!.sp && POLICIES.includes(ref.tags!.sp.toLowerCase()) ? ref.tags!.sp : ref.tags!.p).toLowerCase();
+  return { policy, from: ref.n };
+}
+
+export async function analyzeMail(zone: string, records: DnsRecord[], resolver: Resolver): Promise<MailReport> {
+  const apex = await analyzeName(zone, zone, records, resolver);
+  const subdomains = await Promise.all(mailSubdomains(zone, records).map((n) => analyzeName(zone, n, records, resolver)));
+  const sum = (k: "errors" | "warnings") => subdomains.reduce((x, s) => x + s.score[k], apex.score[k]);
+  return { ...apex, subdomains, total: { errors: sum("errors"), warnings: sum("warnings") } };
+}
+
+// On a subdomain some checks don't apply: protection and reports are the apex's business, and
+// DKIM signs for the sender address, which is often the apex even when bounces go to the subdomain.
+async function analyzeName(zone: string, name: string, records: DnsRecord[], resolver: Resolver): Promise<NameReport> {
+  const z = lower(zone);
+  const n = lower(name);
+  const sub = n !== z;
+  const at = (x: string) => lower(x) === n;
   const checks: Check[] = [];
-  const add = (c: Check) => checks.push(c);
+  const add = (c: Check) => checks.push(sub ? { ...c, name: n } : c);
 
   const mx = records
     .filter((r) => r.type === "MX" && at(r.name))
@@ -122,13 +194,13 @@ export async function analyzeMail(zone: string, records: DnsRecord[], resolver: 
   const rootTxt = records.filter((r) => r.type === "TXT" && at(r.name)).map((r) => txtValue(r.content));
   const spf = rootTxt.filter((t) => /^v=spf1(\s|$)/i.test(t));
   const dmarc = records
-    .filter((r) => r.type === "TXT" && lower(r.name) === `_dmarc.${z}`)
+    .filter((r) => r.type === "TXT" && lower(r.name) === `_dmarc.${n}`)
     .map((r) => txtValue(r.content))
     .filter((t) => /^v=DMARC1/i.test(t));
   const dkim = records
-    .filter((r) => lower(r.name).endsWith(`._domainkey.${z}`) && (r.type === "TXT" || r.type === "CNAME"))
+    .filter((r) => lower(r.name).endsWith(`._domainkey.${n}`) && (r.type === "TXT" || r.type === "CNAME"))
     .map((r) => ({
-      selector: lower(r.name).slice(0, -`._domainkey.${z}`.length),
+      selector: lower(r.name).slice(0, -`._domainkey.${n}`.length),
       type: r.type,
       content: r.type === "TXT" ? txtValue(r.content) : lower(r.content),
     }))
@@ -147,7 +219,7 @@ export async function analyzeMail(zone: string, records: DnsRecord[], resolver: 
 
   // MX
   if (nullMx && realMx.length) add({ id: "mx-null-mixed", level: "error", area: "mx" });
-  if (mode === "none" && !nullMx) add({ id: "none-unprotected", level: "warning", area: "mx", fix: "protect-no-mail" });
+  if (mode === "none" && !nullMx && !sub) add({ id: "none-unprotected", level: "warning", area: "mx", fix: "protect-no-mail" });
   if (mode === "protected") add({ id: "protected", level: "ok", area: "mx" });
   for (const m of realMx) {
     const host = m.host;
@@ -178,7 +250,8 @@ export async function analyzeMail(zone: string, records: DnsRecord[], resolver: 
   let spfLookups: number | null = null;
   if (records.some((r) => r.type === "SPF" && at(r.name))) add({ id: "spf-type", level: "warning", area: "spf" });
   if (!spf.length) {
-    if (mode === "mail") add({ id: "spf-missing", level: "error", area: "spf", fix: "add-spf" });
+    // A subdomain that receives may not send at all: worth fixing, not an error.
+    if (mode === "mail") add({ id: "spf-missing", level: sub ? "warning" : "error", area: "spf", fix: "add-spf" });
     else if (nullMx) add({ id: "spf-missing-nomail", level: "warning", area: "spf", fix: "protect-no-mail" });
   } else if (spf.length > 1) {
     add({ id: "spf-multiple", level: "error", area: "spf", params: { count: spf.length } });
@@ -198,18 +271,26 @@ export async function analyzeMail(zone: string, records: DnsRecord[], resolver: 
   }
 
   // DMARC
-  if (!dmarc.length) {
+  const dmarcTags = dmarc.length === 1 ? parseTags(dmarc[0]) : {};
+  const inherited = !dmarc.length && sub ? inheritedDmarc(z, n, records) : null;
+  if (inherited) {
+    add({ id: "dmarc-inherited", level: inherited.policy === "none" ? "info" : "ok", area: "dmarc", params: inherited });
+  } else if (!dmarc.length && sub) {
+    // Nothing to follow: the subdomain needs a DMARC of its own (or the apex one).
+    if (mode !== "none" || nullMx || spf.length) add({ id: "dmarc-missing", level: "warning", area: "dmarc", fix: "add-dmarc" });
+  } else if (!dmarc.length) {
     if (mode !== "none" || nullMx) add({ id: "dmarc-missing", level: "warning", area: "dmarc", fix: "add-dmarc" });
   } else if (dmarc.length > 1) {
     add({ id: "dmarc-multiple", level: "error", area: "dmarc", params: { count: dmarc.length } });
   } else {
-    const tags = parseTags(dmarc[0]);
+    const tags = dmarcTags;
     const p = tags.p?.toLowerCase();
     if (!p || !["none", "quarantine", "reject"].includes(p)) add({ id: "dmarc-invalid", level: "error", area: "dmarc" });
     else if (p === "none") add({ id: "dmarc-none", level: "warning", area: "dmarc" });
     if (mode === "protected" && p && p !== "reject") add({ id: "dmarc-nomail-soft", level: "warning", area: "dmarc" });
+    if (mode === "protected" && !sub && tags.sp && tags.sp.toLowerCase() !== "reject") add({ id: "dmarc-sp-weak", level: "warning", area: "dmarc", fix: "protect-no-mail" });
     if (tags.pct && Number(tags.pct) < 100) add({ id: "dmarc-pct", level: "info", area: "dmarc", params: { pct: tags.pct } });
-    if (!tags.rua && mode === "mail") add({ id: "dmarc-no-rua", level: "info", area: "dmarc" });
+    if (!tags.rua && mode === "mail" && !sub) add({ id: "dmarc-no-rua", level: "info", area: "dmarc" });
     if (!checks.some((c) => c.area === "dmarc" && c.level !== "info")) add({ id: "dmarc-ok", level: "ok", area: "dmarc", params: { policy: p ?? "", value: dmarc[0] } });
   }
 
@@ -232,16 +313,16 @@ export async function analyzeMail(zone: string, records: DnsRecord[], resolver: 
       else if (bits === 1024) add({ id: "dkim-1024", level: "info", area: "dkim", params: { selector } });
     }
   }
-  if (mode === "mail") {
+  if (mode === "mail" && !sub) {
     if (!dkim.length) add({ id: "dkim-missing", level: "warning", area: "dkim", params: provider?.dkim ? { provider: provider.name, selectors: provider.dkim.join(", ") } : {} });
   }
 
   // Who sends: each service should be both in SPF and signing with DKIM.
-  const senders = detectSenders(z, records);
+  const senders = detectSenders(n, records);
   for (const sd of senders) {
     if (sd.unknown) continue;
     // Already covered: no DKIM at all is "dkim-missing", receiving provider missing from SPF is "spf-provider".
-    if (sd.spf && !sd.dkim && sd.needsDkim && !(sd.receives && checks.some((c) => c.id === "dkim-missing"))) {
+    if (sd.spf && !sd.dkim && sd.needsDkim && !sub && !(sd.receives && checks.some((c) => c.id === "dkim-missing"))) {
       add({ id: "sender-no-dkim", level: "warning", area: "dkim", params: { sender: sd.name, ...(sd.docs && { docs: sd.docs }) } });
     }
     if (sd.dkim && !sd.spf && sd.needsSpf && sd.include && spf.length === 1 && !sd.receives) {
@@ -253,12 +334,14 @@ export async function analyzeMail(zone: string, records: DnsRecord[], resolver: 
   }
 
   // Other
-  if (mode === "mail") {
-    const has = (n: string) => records.some((r) => lower(r.name) === `${n}.${z}` && r.type === "TXT");
+  if (mode === "mail" && !sub) {
+    const has = (x: string) => records.some((r) => lower(r.name) === `${x}.${z}` && r.type === "TXT");
     if (!has("_mta-sts")) add({ id: "mta-sts-missing", level: "info", area: "other" });
     if (!has("_smtp._tls")) add({ id: "tls-rpt-missing", level: "info", area: "other" });
   }
+  // MX and SPF of the apex don't cover its subdomains: a wildcard SPF covers the names that don't exist.
+  if (mode === "protected" && !sub && !records.some((r) => lower(r.name) === `*.${z}`)) add({ id: "subs-unprotected", level: "info", area: "other", fix: "protect-no-mail" });
 
   const score = { errors: checks.filter((c) => c.level === "error").length, warnings: checks.filter((c) => c.level === "warning").length };
-  return { mode, provider, records: { mx, spf, dmarc, dkim }, spfLookups, senders, checks, score };
+  return { name: n, mode, provider, records: { mx, spf, dmarc, dkim }, spfLookups, senders, checks, score };
 }

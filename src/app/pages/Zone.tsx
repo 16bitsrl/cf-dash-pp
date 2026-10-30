@@ -6,7 +6,7 @@ import { MailPanel, ParkingPanel, RecordsPanel, RedirectsPanel } from "../compon
 import { Container, DashPill, ErrorState, LevelIcon, Loading, MailBadge, PageHeader, UsageBadge, ZoneStatus } from "../components/ui";
 import { checkText, useT } from "../i18n";
 import { useApi, type ZoneDetail } from "../lib/api";
-import { dash, useFormat } from "../lib/format";
+import { dash, shortName, useFormat } from "../lib/format";
 import { useZones } from "../lib/hooks";
 import { navigate, zonePath, type ZoneTab } from "../lib/router";
 
@@ -89,7 +89,8 @@ function Overview({ z, acc }: { z: ZoneDetail; acc: string }) {
   const t = useT();
   const f = useFormat();
   const name = z.zone.name;
-  const issues = z.mail.checks.filter((c) => c.level === "error" || c.level === "warning");
+  const allChecks = [z.mail, ...z.mail.subdomains].flatMap((m) => m.checks);
+  const issues = allChecks.filter((c) => c.level === "error" || c.level === "warning");
   const redirect = z.redirects.find((r) => r.enabled && r.hosts.includes(name));
   // Where the domain and www point, for a domain that serves something of its own.
   // What answers on the domain and on www: a redirect first, then a Worker, then the records.
@@ -104,7 +105,7 @@ function Overview({ z, acc }: { z: ZoneDetail; acc: string }) {
   const shown = new Set(answers.flatMap((a) => (a.redirect ? [a.redirect.id] : [])));
   const otherRedirects = z.redirects.filter((x) => x.enabled && !shown.has(x.id)).length;
   const types = Object.entries(z.records.reduce<Record<string, number>>((m, r) => ((m[r.type] = (m[r.type] ?? 0) + 1), m), {})).sort((x, y) => y[1] - x[1]);
-  const area = (a: (typeof AREAS)[number]) => z.mail.checks.filter((c) => c.area === a).reduce<keyof typeof RANK>((w, c) => (RANK[c.level] > RANK[w] ? c.level : w), "ok");
+  const area = (a: (typeof AREAS)[number]) => allChecks.filter((c) => c.area === a).reduce<keyof typeof RANK>((w, c) => (RANK[c.level] > RANK[w] ? c.level : w), "ok");
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
       <LayerCard>
@@ -135,8 +136,8 @@ function Overview({ z, acc }: { z: ZoneDetail; acc: string }) {
                 ))}
               </span>
             </Row>
-            <Row label={t.zone.mail} href={zonePath(acc, name, "email")} detail={z.mail.score.errors + z.mail.score.warnings > 0 && z.mail.provider?.name}>
-              <MailBadge mail={{ mode: z.mail.mode, provider: z.mail.provider?.name ?? null, errors: z.mail.score.errors, warnings: z.mail.score.warnings, checks: [] }} />
+            <Row label={t.zone.mail} href={zonePath(acc, name, "email")} detail={z.mail.total.errors + z.mail.total.warnings > 0 && z.mail.provider?.name}>
+              <MailBadge mail={{ mode: z.mail.mode, provider: z.mail.provider?.name ?? null, errors: z.mail.total.errors, warnings: z.mail.total.warnings, checks: [] }} />
               {z.mail.mode !== "none" && (
                 <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
                   {AREAS.map((a) => (
@@ -173,6 +174,7 @@ function Overview({ z, acc }: { z: ZoneDetail; acc: string }) {
                   <li key={i} className="flex items-start gap-3">
                     <LevelIcon level={c.level} />
                     <a href={zonePath(acc, name, "email")} className="text-sm hover:underline">
+                      {c.name && <span className="font-mono text-xs text-kumo-subtle">{shortName(c.name, name)} · </span>}
                       {checkText(t, c).title}
                     </a>
                   </li>

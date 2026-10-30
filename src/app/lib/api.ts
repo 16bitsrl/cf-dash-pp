@@ -128,7 +128,7 @@ export type CachedZone = {
   parking: Parking["state"] | null;
   redirectTarget: string | null;
   redirects: number | null;
-  mail: { mode: MailReport["mode"] | null; provider: string | null; errors: number | null; warnings: number | null; checks: Pick<Check, "id" | "level" | "params">[] };
+  mail: { mode: MailReport["mode"] | null; provider: string | null; errors: number | null; warnings: number | null; checks: Pick<Check, "id" | "level" | "params" | "name">[] };
   lastChangeAt: number | null;
   records: number | null;
 };

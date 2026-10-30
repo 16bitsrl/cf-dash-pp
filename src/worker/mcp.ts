@@ -35,6 +35,7 @@ const str = (description: string, e?: readonly string[]): Prop => ({ type: "stri
 const bool = (description: string): Prop => ({ type: "boolean", description });
 const account = str("Account id or name, from list_accounts.");
 const domain = str("Domain name, such as example.com.");
+const subdomain = str("Subdomain the mail records belong to, such as send.example.com. Optional: the domain itself when missing.");
 
 async function accountId(c: McpCtx, a: unknown) {
   const q = String(a ?? "").trim().toLowerCase();
@@ -113,7 +114,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_domain",
-    description: "Reads a domain from Cloudflare now: DNS records, parking, redirect rules (with their ids), Workers serving it, mail checks (each with an optional fix id for fix_mail) and the latest record changes.",
+    description: "Reads a domain from Cloudflare now: DNS records, parking, redirect rules (with their ids), Workers serving it, mail checks (each with an optional fix id for fix_mail; subdomains with mail records of their own have their own report, and their checks carry the subdomain name) and the latest record changes.",
     props: { domain },
     required: ["domain"],
     run: async (a, c) => slimZone(await c.call("GET", `/zones/${await zoneOf(c, a)}`)),
@@ -163,27 +164,27 @@ const TOOLS: Tool[] = [
   {
     name: "set_mail_provider",
     description: "Sets the MX records for a mail provider, replacing the current ones. 'none' removes them and says the domain receives no mail.",
-    props: { domain, provider: str("Mail provider.", ["google", "microsoft", "qboxmail", "forwardemail", "none"]), update_spf: bool("Also update SPF to match. Default true.") },
+    props: { domain, provider: str("Mail provider.", ["google", "microsoft", "qboxmail", "forwardemail", "none"]), update_spf: bool("Also update SPF to match. Default true."), subdomain },
     required: ["domain", "provider"],
     write: true,
     destructive: true,
-    run: async (a, c) => mutation(c, "POST", `/zones/${await zoneOf(c, a)}/mail/mx`, { preset: a.provider, updateSpf: a.update_spf !== false }),
+    run: async (a, c) => mutation(c, "POST", `/zones/${await zoneOf(c, a)}/mail/mx`, { preset: a.provider, updateSpf: a.update_spf !== false, name: a.subdomain }),
   },
   {
     name: "set_spf",
-    description: "Sets the SPF record of the domain, replacing the current one.",
-    props: { domain, value: str("Full SPF value, such as 'v=spf1 include:_spf.google.com ~all'.") },
+    description: "Sets the SPF record of the domain (or of one of its subdomains), replacing the current one.",
+    props: { domain, value: str("Full SPF value, such as 'v=spf1 include:_spf.google.com ~all'."), subdomain },
     required: ["domain", "value"],
     write: true,
-    run: async (a, c) => mutation(c, "PUT", `/zones/${await zoneOf(c, a)}/mail/spf`, { value: a.value }),
+    run: async (a, c) => mutation(c, "PUT", `/zones/${await zoneOf(c, a)}/mail/spf`, { value: a.value, name: a.subdomain }),
   },
   {
     name: "set_dmarc",
-    description: "Sets the DMARC record of the domain, replacing the current one.",
-    props: { domain, policy: str("DMARC policy.", ["none", "quarantine", "reject"]), report_to: str("Address that receives the reports (rua), such as mailto:dmarc@example.com. Optional.") },
+    description: "Sets the DMARC record of the domain (or of one of its subdomains), replacing the current one.",
+    props: { domain, policy: str("DMARC policy.", ["none", "quarantine", "reject"]), report_to: str("Address that receives the reports (rua), such as mailto:dmarc@example.com. Optional."), subdomain },
     required: ["domain", "policy"],
     write: true,
-    run: async (a, c) => mutation(c, "PUT", `/zones/${await zoneOf(c, a)}/mail/dmarc`, { policy: a.policy, rua: a.report_to }),
+    run: async (a, c) => mutation(c, "PUT", `/zones/${await zoneOf(c, a)}/mail/dmarc`, { policy: a.policy, rua: a.report_to, name: a.subdomain }),
   },
   {
     name: "fix_mail",
@@ -194,10 +195,11 @@ const TOOLS: Tool[] = [
       policy: str("For add-dmarc.", ["none", "quarantine", "reject"]),
       report_to: str("For add-dmarc: rua address. Optional."),
       include: str("For add-spf-include: the include to add."),
+      subdomain,
     },
     required: ["domain", "fix"],
     write: true,
-    run: async (a, c) => mutation(c, "POST", `/zones/${await zoneOf(c, a)}/mail-fix`, { fix: a.fix, policy: a.policy, rua: a.report_to, include: a.include }),
+    run: async (a, c) => mutation(c, "POST", `/zones/${await zoneOf(c, a)}/mail-fix`, { fix: a.fix, policy: a.policy, rua: a.report_to, include: a.include, name: a.subdomain }),
   },
   {
     name: "get_parking_pages",

@@ -1,7 +1,7 @@
-import { Badge, Banner, Button, Checkbox, Input, LayerCard, Select, Table, Tooltip } from "@cloudflare/kumo";
-import { CheckCircleIcon, CircleIcon, InfoIcon, PencilSimpleIcon, PlusIcon, TrashIcon, WarningIcon } from "@phosphor-icons/react";
+import { Badge, Banner, Button, Checkbox, Collapsible, Input, LayerCard, Select, Table, Tooltip } from "@cloudflare/kumo";
+import { CaretRightIcon, CheckCircleIcon, CircleIcon, InfoIcon, PencilSimpleIcon, PlusIcon, TrashIcon, WarningIcon } from "@phosphor-icons/react";
 import { useState, type ReactNode } from "react";
-import type { Area, Check, FixId } from "../../worker/lib/mail";
+import type { Area, Check, FixId, NameReport } from "../../worker/lib/mail";
 import { displayRecords, type Redirect, type RedirectInput } from "../../worker/lib/zone-state";
 import { mxPreset, proposeSpf, type MxPreset } from "../../worker/lib/senders";
 import { checkText, errorText, useT } from "../i18n";
@@ -311,56 +311,146 @@ function Yes({ ok }: { ok: boolean }) {
 
 export function MailPanel({ z }: { z: ZoneDetail }) {
   const t = useT();
+  const subs = z.mail.subdomains;
+  return (
+    <div className="flex flex-col gap-6">
+      <MailSection z={z} m={z.mail} />
+      {subs.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <div>
+            <h2 className="text-base font-semibold">{t.mail.subdomains}</h2>
+            <p className="mt-1 text-sm text-kumo-subtle">{t.mail.subdomainsHint}</p>
+          </div>
+          {subs.map((s) => (
+            <SubdomainMail key={s.name} z={z} m={s} />
+          ))}
+        </section>
+      )}
+    </div>
+  );
+}
+
+function Score({ m }: { m: NameReport }) {
+  const t = useT();
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {m.score.errors > 0 && <Badge variant="error">{t.mail.errors(m.score.errors)}</Badge>}
+      {m.score.warnings > 0 && <Badge variant="warning">{t.mail.warnings(m.score.warnings)}</Badge>}
+      {!m.score.errors && !m.score.warnings && <Badge variant="success">{t.mail.allGood}</Badge>}
+    </div>
+  );
+}
+
+function headline(t: ReturnType<typeof useT>, m: NameReport, sub: boolean) {
+  if (m.mode === "protected") return t.mail.headlineProtected;
+  if (m.mode === "none") return sub && m.records.spf.length ? t.mail.headlineSendsOnly : t.mail.headlineNone;
+  return m.provider ? t.mail.headlineProvider(m.provider.name) : t.mail.headlineOwn;
+}
+
+function SubdomainMail({ z, m }: { z: ZoneDetail; m: NameReport }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  return (
+    <LayerCard>
+      <Collapsible.Root open={open} onOpenChange={setOpen}>
+        <Collapsible.Trigger className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 px-4 py-3 text-left">
+          <span className="flex min-w-0 items-center gap-3">
+            <CaretRightIcon size={14} className={`shrink-0 text-kumo-subtle transition-transform ${open ? "rotate-90" : ""}`} />
+            <span className="min-w-0">
+              <span className="block truncate font-mono text-sm font-medium">{m.name}</span>
+              <span className="block text-sm text-kumo-subtle">{headline(t, m, true)}</span>
+            </span>
+          </span>
+          <Score m={m} />
+        </Collapsible.Trigger>
+        <Collapsible.Panel>
+          <div className="border-t border-kumo-hairline p-4">
+            <MailSection z={z} m={m} sub />
+          </div>
+        </Collapsible.Panel>
+      </Collapsible.Root>
+    </LayerCard>
+  );
+}
+
+// On a subdomain the boxes are plain sections, since the whole thing is already inside a card.
+function Plain({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold">{title}</h3>
+      {children}
+    </div>
+  );
+}
+
+function MailSection({ z, m, sub = false }: { z: ZoneDetail; m: NameReport; sub?: boolean }) {
+  const t = useT();
   const { run, busy } = useMutation();
   const [fix, setFix] = useState<FixId | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [policy, setPolicy] = useState("none");
   const [rua, setRua] = useState("");
-  const m = z.mail;
-  const name = z.zone.name;
+  const name = m.name;
   const acc = z.zone.account.id;
-  const headline = m.mode === "protected" ? t.mail.headlineProtected : m.mode === "none" ? t.mail.headlineNone : m.provider ? t.mail.headlineProvider(m.provider.name) : t.mail.headlineOwn;
+  const Box = sub ? Plain : Card;
+  // Requests for a subdomain say which one; without a name they go to the apex.
+  const target = sub ? { name } : {};
   const spfValue = m.provider?.spf ? `v=spf1 include:${m.provider.spf} ~all` : "v=spf1 mx ~all";
-  const dmarcManagement = dash.zone(acc, name, "/email/dmarc-management");
+  const dmarcManagement = dash.zone(acc, z.zone.name, "/email/dmarc-management");
   const dmarcTags = m.records.dmarc[0] ? Object.fromEntries(m.records.dmarc[0].split(";").map((x) => x.trim().split("=").map((y) => y.trim()))) : {};
+  // Without its own DMARC a subdomain follows the apex: start from that, not from "none".
+  const inherited = m.checks.find((c) => c.id === "dmarc-inherited")?.params?.policy;
+  const currentPolicy = ["none", "quarantine", "reject"].includes(dmarcTags.p) ? dmarcTags.p : String(inherited ?? "none");
 
   // SPF proposal: what's there, plus the services that sign or receive but are missing.
   const missingIncludes = m.senders.filter((s) => !s.spf && s.include && s.needsSpf && (s.dkim || s.receives)).map((s) => s.include!);
   const openSpf = (extra: string[] = []) => setEditor({ kind: "spf", value: proposeSpf(m.records.spf, [...missingIncludes, ...extra]) });
   const presetOf = (): MxPreset => (m.provider && ["google", "microsoft", "qboxmail", "forwardemail"].includes(m.provider.id) ? (m.provider.id as MxPreset) : "google");
 
-  return (
-    <div className="flex flex-col gap-6">
-      <LayerCard>
-        <LayerCard.Primary>
-          <div className="flex w-full flex-wrap items-center justify-between gap-4 text-left">
-            <div>
-              <div className="text-base font-semibold">{headline}</div>
-              <div className="mt-1 text-sm text-kumo-subtle">{m.records.mx.length ? m.records.mx.map((x) => (x.host === "." || !x.host ? t.mail.nullMx : `${x.host} (${x.priority})`)).join(", ") : t.mail.noMx}</div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {m.score.errors > 0 && <Badge variant="error">{t.mail.errors(m.score.errors)}</Badge>}
-              {m.score.warnings > 0 && <Badge variant="warning">{t.mail.warnings(m.score.warnings)}</Badge>}
-              {!m.score.errors && !m.score.warnings && <Badge variant="success">{t.mail.allGood}</Badge>}
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-kumo-hairline pt-4">
-            <Button size="sm" variant="secondary" onClick={() => setEditor({ kind: "mx", preset: presetOf(), updateSpf: true })}>
-              {t.mail.setMx}
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => openSpf()}>
-              {t.mail.editSpf}
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => setEditor({ kind: "dmarc", policy: ["none", "quarantine", "reject"].includes(dmarcTags.p) ? dmarcTags.p : "none", rua: "" })}>
-              {t.mail.editDmarc}
-            </Button>
+  const mxLine = m.records.mx.length ? m.records.mx.map((x) => (x.host === "." || !x.host ? t.mail.nullMx : `${x.host} (${x.priority})`)).join(", ") : t.mail.noMx;
+  const tools = (
+      <div className={`flex flex-wrap items-center gap-2 ${sub ? "" : "mt-4 border-t border-kumo-hairline pt-4"}`}>
+        <Button size="sm" variant="secondary" onClick={() => setEditor({ kind: "mx", preset: presetOf(), updateSpf: true })}>
+          {t.mail.setMx}
+        </Button>
+        <Button size="sm" variant="secondary" onClick={() => openSpf()}>
+          {t.mail.editSpf}
+        </Button>
+        <Button size="sm" variant="secondary" onClick={() => setEditor({ kind: "dmarc", policy: currentPolicy, rua: "" })}>
+          {t.mail.editDmarc}
+        </Button>
+        {!sub && (
+          <>
             <span className="flex-1" />
             <DeepLink href={dmarcManagement} label={t.mail.dmarcManagement} />
-          </div>
-        </LayerCard.Primary>
-      </LayerCard>
+          </>
+        )}
+      </div>
+  );
 
-      <Card title={t.mail.senders}>
+  return (
+    <div className="flex flex-col gap-6">
+      {sub ? (
+        <div className="flex flex-col gap-3">
+          <div className="text-sm text-kumo-subtle">{mxLine}</div>
+          {tools}
+        </div>
+      ) : (
+        <LayerCard>
+          <LayerCard.Primary>
+            <div className="flex w-full flex-wrap items-center justify-between gap-4 text-left">
+              <div>
+                <div className="text-base font-semibold">{headline(t, m, false)}</div>
+                <div className="mt-1 text-sm text-kumo-subtle">{mxLine}</div>
+              </div>
+              <Score m={m} />
+            </div>
+            {tools}
+          </LayerCard.Primary>
+        </LayerCard>
+      )}
+
+      <Box title={sub ? t.mail.sendersSub : t.mail.senders}>
         <p className="mb-3 text-sm text-kumo-subtle">{t.mail.sendersHint}</p>
         {m.senders.length ? (
           <TableCard>
@@ -409,13 +499,13 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         ) : (
           <p className="text-sm text-kumo-subtle">{t.mail.noSenders}</p>
         )}
-      </Card>
+      </Box>
 
       {AREAS.map((area) => {
         const checks = m.checks.filter((c) => c.area === area);
         if (!checks.length) return null;
         return (
-          <Card key={area} title={t.mail.areas[area]}>
+          <Box key={area} title={t.mail.areas[area]}>
             <ul className="flex flex-col divide-y divide-kumo-hairline">
               {checks.map((c: Check, i) => {
                 const text = checkText(t, c);
@@ -434,14 +524,14 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
                     )}
                     {c.fix && (
                       <Button size="sm" variant="secondary" onClick={() => (c.fix === "add-spf-include" ? openSpf([String(c.params?.include ?? "")]) : c.fix === "google-mx" ? setEditor({ kind: "mx", preset: "google", updateSpf: true }) : setFix(c.fix!))}>
-                        {t.mail.fix[c.fix]}
+                        {sub && c.fix === "protect-no-mail" ? t.mail.protect : t.mail.fix[c.fix]}
                       </Button>
                     )}
                   </li>
                 );
               })}
             </ul>
-          </Card>
+          </Box>
         );
       })}
 
@@ -455,7 +545,7 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         size="lg"
         busy={busy}
         onConfirm={async () => {
-          if (editor?.kind === "mx" && (await run(z.zone.id, "POST", "/mail/mx", { preset: editor.preset, updateSpf: editor.updateSpf }, t.mail.mxDone))) setEditor(null);
+          if (editor?.kind === "mx" && (await run(z.zone.id, "POST", "/mail/mx", { preset: editor.preset, updateSpf: editor.updateSpf, ...target }, t.mail.mxDone))) setEditor(null);
         }}
       >
         {editor?.kind === "mx" && (
@@ -490,7 +580,7 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         size="lg"
         busy={busy}
         onConfirm={async () => {
-          if (editor?.kind === "spf" && (await run(z.zone.id, "PUT", "/mail/spf", { value: editor.value }, t.mail.spfSaved))) setEditor(null);
+          if (editor?.kind === "spf" && (await run(z.zone.id, "PUT", "/mail/spf", { value: editor.value, ...target }, t.mail.spfSaved))) setEditor(null);
         }}
       >
         {editor?.kind === "spf" && (
@@ -515,7 +605,7 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         confirm={t.common.save}
         busy={busy}
         onConfirm={async () => {
-          if (editor?.kind === "dmarc" && (await run(z.zone.id, "PUT", "/mail/dmarc", { policy: editor.policy, rua: editor.rua.trim() || undefined }, t.mail.dmarcSaved))) setEditor(null);
+          if (editor?.kind === "dmarc" && (await run(z.zone.id, "PUT", "/mail/dmarc", { policy: editor.policy, rua: editor.rua.trim() || undefined, ...target }, t.mail.dmarcSaved))) setEditor(null);
         }}
       >
         {editor?.kind === "dmarc" && (
@@ -523,14 +613,16 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
             <Select label={t.mail.policy} value={editor.policy} onValueChange={(v) => setEditor({ ...editor, policy: String(v) })} items={t.mail.policies} />
             <Input
               label={<>{t.mail.rua} <span className="font-normal text-kumo-subtle">{t.common.optional}</span></>}
-              placeholder={`dmarc@${name}`}
+              placeholder={`dmarc@${z.zone.name}`}
               value={editor.rua}
               onChange={(e) => setEditor({ ...editor, rua: e.target.value })}
               description={dmarcTags.rua ? t.mail.dmarcRuaKeep(dmarcTags.rua.replace(/^mailto:/, "")) : t.mail.ruaHint}
             />
-            <div className="flex flex-wrap items-center gap-3 text-sm text-kumo-subtle">
-              {t.mail.dmarcCfHint} <DeepLink href={dmarcManagement} label={t.mail.dmarcManagement} />
-            </div>
+            {!sub && (
+              <div className="flex flex-wrap items-center gap-3 text-sm text-kumo-subtle">
+                {t.mail.dmarcCfHint} <DeepLink href={dmarcManagement} label={t.mail.dmarcManagement} />
+              </div>
+            )}
           </>
         )}
       </ConfirmDialog>
@@ -543,11 +635,12 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         confirm={t.mail.protect}
         busy={busy}
         onConfirm={async () => {
-          if (await run(z.zone.id, "POST", "/mail-fix", { fix: "protect-no-mail" }, t.mail.protected)) setFix(null);
+          if (await run(z.zone.id, "POST", "/mail-fix", { fix: "protect-no-mail", ...target }, t.mail.protected)) setFix(null);
         }}
       >
         <ul className="list-disc pl-5 text-sm text-kumo-subtle">
-          {t.mail.protectItems.map((i) => (
+          {/* On a subdomain: MX and SPF, DMARC only if it has its own; nothing on other names. */}
+          {(sub ? t.mail.protectItems.slice(0, m.records.dmarc.length === 1 ? 3 : 2) : t.mail.protectItems).map((i) => (
             <li key={i}>{i}</li>
           ))}
         </ul>
@@ -561,14 +654,16 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         confirm={t.mail.add}
         busy={busy}
         onConfirm={async () => {
-          if (await run(z.zone.id, "POST", "/mail-fix", { fix: "add-dmarc", policy, rua: rua.trim() || undefined }, t.mail.dmarcAdded)) setFix(null);
+          if (await run(z.zone.id, "POST", "/mail-fix", { fix: "add-dmarc", policy, rua: rua.trim() || undefined, ...target }, t.mail.dmarcAdded)) setFix(null);
         }}
       >
         <Select label={t.mail.policy} value={policy} onValueChange={(v) => setPolicy(String(v))} items={t.mail.policies} />
-        <Input label={t.mail.rua} placeholder={`dmarc@${name}`} value={rua} onChange={(e) => setRua(e.target.value)} description={t.mail.ruaHint} />
-        <div className="flex flex-wrap items-center gap-3 text-sm text-kumo-subtle">
-          {t.mail.dmarcCfHint} <DeepLink href={dmarcManagement} label={t.mail.dmarcManagement} />
-        </div>
+        <Input label={t.mail.rua} placeholder={`dmarc@${z.zone.name}`} value={rua} onChange={(e) => setRua(e.target.value)} description={t.mail.ruaHint} />
+        {!sub && (
+          <div className="flex flex-wrap items-center gap-3 text-sm text-kumo-subtle">
+            {t.mail.dmarcCfHint} <DeepLink href={dmarcManagement} label={t.mail.dmarcManagement} />
+          </div>
+        )}
       </ConfirmDialog>
 
       <ConfirmDialog
@@ -579,7 +674,7 @@ export function MailPanel({ z }: { z: ZoneDetail }) {
         confirm={t.mail.add}
         busy={busy}
         onConfirm={async () => {
-          if (await run(z.zone.id, "POST", "/mail-fix", { fix: "add-spf" }, t.mail.spfAdded)) setFix(null);
+          if (await run(z.zone.id, "POST", "/mail-fix", { fix: "add-spf", ...target }, t.mail.spfAdded)) setFix(null);
         }}
       />
     </div>

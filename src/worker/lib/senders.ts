@@ -39,7 +39,8 @@ export const SENDERS: SenderDef[] = [
   { id: "forwardemail", name: "Forward Email", include: "spf.forwardemail.net", spf: /^spf\.forwardemail\.net$/, dkim: sel(/^fe-[0-9a-f]+$/), mx: /\.forwardemail\.net$/, needsSpf: true, needsDkim: true, docs: "https://forwardemail.net/en/faq#how-do-i-set-up-dkim" },
   { id: "cloudflare", name: "Cloudflare Email Routing", include: "_spf.mx.cloudflare.net", spf: /^_spf\.mx\.cloudflare\.net$/, dkim: sel(/^cf\d{4}-\d+$/), mx: /\.mx\.cloudflare\.net$/, needsSpf: true, needsDkim: false, docs: "https://developers.cloudflare.com/email-routing/" },
   { id: "zoho", name: "Zoho Mail", include: "zoho.eu", spf: /^(zoho(mail)?\.(com|eu|in)|zcsend\.net)$/, mx: /(^|\.)zoho(mail)?\.(com|eu|in)$/, needsSpf: true, needsDkim: false },
-  { id: "aruba", name: "Aruba", include: "_spf.aruba.it", spf: /^_spf\.aruba\.it$/, mx: /(^|\.)aruba\.it$/, needsSpf: true, needsDkim: false },
+  { id: "arubapec", name: "Aruba PEC", include: "pec.aruba.it", spf: /^pec\.aruba\.it$/, mx: /\.pec\.aruba\.it$/, needsSpf: true, needsDkim: false },
+  { id: "aruba", name: "Aruba", include: "_spf.aruba.it", spf: /^_spf\.aruba\.it$/, mx: /^(?!.*\.pec\.aruba\.it$).*(^|\.)aruba\.it$/, needsSpf: true, needsDkim: false },
   { id: "ovh", name: "OVHcloud", include: "mx.ovh.com", spf: /^mx\.ovh\.com$/, mx: /\.(ovh\.net|ovh\.com)$/, needsSpf: true, needsDkim: false },
   { id: "register", name: "Register.it", include: "spf.register.it", spf: /^spf\.register\.it$/, mx: /(^|\.)register\.it$/, needsSpf: true, needsDkim: false },
   { id: "mailchimp", name: "Mailchimp", include: "servers.mcsv.net", spf: /^servers\.mcsv\.net$/, dkim: cname(/dkim\.mcsv\.net$/), needsSpf: false, needsDkim: true, docs: "https://mailchimp.com/help/set-up-email-domain-authentication/" },
@@ -136,8 +137,8 @@ export function mxPreset(preset: MxPreset, zone: string): { host: string; priori
 
 export const MX_PRESET_INCLUDE: Partial<Record<MxPreset, string>> = { google: "_spf.google.com", microsoft: "spf.protection.outlook.com", qboxmail: "spf.qboxmail.com", forwardemail: "spf.forwardemail.net" };
 
-/** DMARC with a new policy and optionally a report address; other tags are kept. */
-export function dmarcValue(current: string | undefined, change: { policy: "none" | "quarantine" | "reject"; rua?: string }) {
+/** DMARC with a new policy and optionally a report address and subdomain policy; other tags are kept. */
+export function dmarcValue(current: string | undefined, change: { policy: "none" | "quarantine" | "reject"; rua?: string; sp?: "none" | "quarantine" | "reject" }) {
   const tags = (current ?? "")
     .split(";")
     .map((t) => t.trim())
@@ -151,6 +152,7 @@ export function dmarcValue(current: string | undefined, change: { policy: "none"
     else tags.push([k, v]);
   };
   set("p", change.policy);
+  if (change.sp) set("sp", change.sp);
   if (change.rua) set("rua", `mailto:${change.rua}`);
   return ["v=DMARC1", ...tags.map(([k, v]) => `${k}=${v}`)].join("; ");
 }

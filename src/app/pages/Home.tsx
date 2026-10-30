@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { Container, ErrorState, LevelIcon, Loading, PageHeader } from "../components/ui";
 import { checkText, useT } from "../i18n";
 import { useApi, type Change, type Me } from "../lib/api";
-import { useFormat } from "../lib/format";
+import { shortName, useFormat } from "../lib/format";
 import { useAction, useZones } from "../lib/hooks";
 import { zonePath, type ZoneTab } from "../lib/router";
 import { SyncButton } from "./Domains";
@@ -47,7 +47,7 @@ export function Home({ me, acc, onMeChange }: { me: Me; acc: string; onMeChange:
   const mailIssues = zones.filter((z) => (z.cached?.mail.errors ?? 0) + (z.cached?.mail.warnings ?? 0) > 0);
   const todo: { zone: string; level: "error" | "warning"; title: string; tab: ZoneTab }[] = [
     ...zones.filter((z) => z.cached?.usage === "parking-partial").map((z) => ({ zone: z.name, level: "warning" as const, title: t.usage["parking-partial"], tab: "parking" as const })),
-    ...mailIssues.flatMap((z) => z.cached!.mail.checks.slice(0, 1).map((c) => ({ zone: z.name, level: c.level as "error" | "warning", title: checkText(t, c).title, tab: "email" as const }))),
+    ...mailIssues.flatMap((z) => z.cached!.mail.checks.slice(0, 1).map((c) => ({ zone: z.name, level: c.level as "error" | "warning", title: `${c.name ? `${shortName(c.name, z.name)} · ` : ""}${checkText(t, c).title}`, tab: "email" as const }))),
   ].sort((a, b) => (a.level === "error" ? -1 : 0) - (b.level === "error" ? -1 : 0));
   const recent = (activity.data?.changes ?? []).slice(0, 8);
 

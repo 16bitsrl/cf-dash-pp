@@ -132,9 +132,14 @@ export async function syncZone(db: D1Database, api: CfApi, zoneId: string, src: 
         data.redirects.length,
         mail.mode,
         mail.provider?.name ?? null,
-        mail.score.errors,
-        mail.score.warnings,
-        JSON.stringify(mail.checks.filter((c) => c.level === "error" || c.level === "warning").map((c) => ({ id: c.id, level: c.level, params: c.params }))),
+        mail.total.errors,
+        mail.total.warnings,
+        JSON.stringify(
+          [mail, ...mail.subdomains]
+            .flatMap((m) => m.checks)
+            .filter((c) => c.level === "error" || c.level === "warning")
+            .map((c) => ({ id: c.id, level: c.level, params: c.params, name: c.name })),
+        ),
         changes ? t : null,
       ),
   );

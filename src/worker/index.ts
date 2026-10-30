@@ -412,24 +412,24 @@ api.put("/zones/:zone/redirects/:rule", async (c) => {
 api.delete("/zones/:zone/redirects/:rule", async (c) => mutate(c, "redirect.delete", ({ data }) => deleteRedirect(cf(c), data, c.req.param("rule"), c.req.query("records") === "1")));
 
 api.post("/zones/:zone/mail-fix", async (c) => {
-  const body = await c.req.json<{ fix: FixId } & FixOptions>();
-  return mutate(c, `mail.${body.fix}`, ({ data, mail }) => applyMailFix(cf(c), data, mail, body.fix, body));
+  const body = await c.req.json<{ fix: FixId; name?: string } & FixOptions>();
+  return mutate(c, `mail.${body.fix}`, ({ data, mail }) => applyMailFix(cf(c), data, mail, body.fix, body, body.name));
 });
 
 api.post("/zones/:zone/mail/mx", async (c) => {
-  const body = await c.req.json<{ preset: MxPreset; updateSpf?: boolean }>();
+  const body = await c.req.json<{ preset: MxPreset; updateSpf?: boolean; name?: string }>();
   if (!["google", "microsoft", "qboxmail", "forwardemail", "none"].includes(body.preset)) throw new Conflict("bad-request");
-  return mutate(c, "mail.mx", ({ data }) => setMx(cf(c), data, body.preset, body.updateSpf !== false));
+  return mutate(c, "mail.mx", ({ data }) => setMx(cf(c), data, body.preset, body.updateSpf !== false, body.name));
 });
 
 api.put("/zones/:zone/mail/spf", async (c) => {
-  const { value } = await c.req.json<{ value: string }>();
-  return mutate(c, "mail.spf", ({ data }) => setSpf(cf(c), data, String(value ?? "")));
+  const { value, name } = await c.req.json<{ value: string; name?: string }>();
+  return mutate(c, "mail.spf", ({ data }) => setSpf(cf(c), data, String(value ?? ""), name));
 });
 
 api.put("/zones/:zone/mail/dmarc", async (c) => {
-  const body = await c.req.json<{ policy: "none" | "quarantine" | "reject"; rua?: string }>();
-  return mutate(c, "mail.dmarc", ({ data }) => setDmarc(cf(c), data, { policy: body.policy, rua: body.rua?.trim() || undefined }));
+  const body = await c.req.json<{ policy: "none" | "quarantine" | "reject"; rua?: string; name?: string }>();
+  return mutate(c, "mail.dmarc", ({ data }) => setDmarc(cf(c), data, { policy: body.policy, rua: body.rua?.trim() || undefined }, body.name));
 });
 
 api.get("/accounts/:acc/activity", async (c) => {
