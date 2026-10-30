@@ -344,6 +344,7 @@ function Score({ m }: { m: NameReport }) {
 function headline(t: ReturnType<typeof useT>, m: NameReport, sub: boolean) {
   if (m.mode === "protected") return t.mail.headlineProtected;
   if (m.mode === "none") return sub && m.records.spf.length ? t.mail.headlineSendsOnly : t.mail.headlineNone;
+  if (m.provider?.pec) return t.mail.headlinePec(m.provider.name);
   return m.provider ? t.mail.headlineProvider(m.provider.name) : t.mail.headlineOwn;
 }
 

@@ -39,7 +39,7 @@ export const SENDERS: SenderDef[] = [
   { id: "forwardemail", name: "Forward Email", include: "spf.forwardemail.net", spf: /^spf\.forwardemail\.net$/, dkim: sel(/^fe-[0-9a-f]+$/), mx: /\.forwardemail\.net$/, needsSpf: true, needsDkim: true, docs: "https://forwardemail.net/en/faq#how-do-i-set-up-dkim" },
   { id: "cloudflare", name: "Cloudflare Email Routing", include: "_spf.mx.cloudflare.net", spf: /^_spf\.mx\.cloudflare\.net$/, dkim: sel(/^cf\d{4}-\d+$/), mx: /\.mx\.cloudflare\.net$/, needsSpf: true, needsDkim: false, docs: "https://developers.cloudflare.com/email-routing/" },
   { id: "zoho", name: "Zoho Mail", include: "zoho.eu", spf: /^(zoho(mail)?\.(com|eu|in)|zcsend\.net)$/, mx: /(^|\.)zoho(mail)?\.(com|eu|in)$/, needsSpf: true, needsDkim: false },
-  { id: "arubapec", name: "Aruba PEC", include: "pec.aruba.it", spf: /^pec\.aruba\.it$/, mx: /\.pec\.aruba\.it$/, needsSpf: true, needsDkim: false },
+  { id: "arubapec", name: "Aruba PEC", include: "pec.aruba.it", spf: /^pec\.aruba\.it$/, mx: /\.pec\.aruba\.it$/, needsSpf: false, needsDkim: false },
   { id: "aruba", name: "Aruba", include: "_spf.aruba.it", spf: /^_spf\.aruba\.it$/, mx: /^(?!.*\.pec\.aruba\.it$).*(^|\.)aruba\.it$/, needsSpf: true, needsDkim: false },
   { id: "ovh", name: "OVHcloud", include: "mx.ovh.com", spf: /^mx\.ovh\.com$/, mx: /\.(ovh\.net|ovh\.com)$/, needsSpf: true, needsDkim: false },
   { id: "register", name: "Register.it", include: "spf.register.it", spf: /^spf\.register\.it$/, mx: /(^|\.)register\.it$/, needsSpf: true, needsDkim: false },

@@ -283,6 +283,21 @@ describe("sottodomini", () => {
     expect(ids(s, "warning")).toEqual([]);
   });
 
+  it("la PEC non ha bisogno di SPF, con qualsiasi gestore", async () => {
+    const pecs = { pec: "mx.pec.aruba.it", legal: "mx.cert.legalmail.it", reg: "server.pec-email.com", post: "mx.postacert.it.net", nam: "mail.sicurezzapostale.it", poste: "smtp-as.postecert.it" };
+    const r = await analyzeMail(
+      Z,
+      [rec("TXT", "_dmarc", '"v=DMARC1; p=reject"'), ...Object.entries(pecs).map(([n, mx]) => rec("MX", n, mx, { priority: 10 }))],
+      fakeResolver(Object.fromEntries(Object.values(pecs).map((mx) => [`A ${mx}`, ["1.1.1.1"]]))),
+    );
+    for (const n of Object.keys(pecs)) {
+      const s = sub(r, n);
+      expect(s.provider?.pec).toBe(true);
+      expect(ids(s, "warning")).toEqual([]);
+      expect(s.checks.find((c) => c.area === "spf")).toMatchObject({ id: "pec-no-spf", level: "ok" });
+    }
+  });
+
   it("su un sottodominio che riceve, l'SPF mancante è un avviso", async () => {
     const r = await analyzeMail(Z, [rec("MX", "app", "mx1.forwardemail.net", { priority: 10 })], fakeResolver({ "A mx1.forwardemail.net": ["1.1.1.1"] }));
     expect(sub(r, "app").checks.find((c) => c.id === "spf-missing")?.level).toBe("warning");

@@ -29,7 +29,8 @@ export type CheckParams = Record<string, string | number>;
 // name: the subdomain the check is about; missing for the apex.
 export type Check = { id: string; level: Level; area: Area; params?: CheckParams; fix?: FixId; name?: string };
 
-export type Provider = { id: string; name: string; spf?: string; dkim?: string[] };
+// pec: certified email, which travels in the provider's name and needs no SPF or DKIM of its own.
+export type Provider = { id: string; name: string; spf?: string; dkim?: string[]; pec?: boolean };
 
 export type NameReport = {
   name: string;
@@ -62,8 +63,13 @@ const PROVIDERS: (Provider & { mx: RegExp; spfOk?: RegExp; spfFor?: (mx: string)
   { id: "fastmail", name: "Fastmail", mx: /\.messagingengine\.com$/, spf: "spf.messagingengine.com", dkim: ["fm1", "fm2", "fm3"] },
   { id: "icloud", name: "iCloud Mail", mx: /\.mail\.icloud\.com$/, spf: "icloud.com", dkim: ["sig1"] },
   { id: "ovh", name: "OVHcloud", mx: /\.(ovh\.net|ovh\.com)$/, spf: "mx.ovh.com" },
-  // Certified email (PEC) has its own servers and SPF; it usually sits on a "pec." subdomain.
-  { id: "arubapec", name: "Aruba PEC", mx: /\.pec\.aruba\.it$/, spf: "pec.aruba.it" },
+  // Certified email (PEC), usually on a "pec." subdomain.
+  { id: "arubapec", name: "Aruba PEC", mx: /\.pec\.aruba\.it$/, spf: "pec.aruba.it", pec: true },
+  { id: "legalmail", name: "Legalmail", mx: /\.legalmail\.it$/, pec: true },
+  { id: "registerpec", name: "Register.it PEC", mx: /\.pec-email\.com$/, spf: "spf.pec-email.com", pec: true },
+  { id: "postacert", name: "ITNet", mx: /\.postacert\.it\.net$/, spf: "postacert.it.net", pec: true },
+  { id: "namirial", name: "Namirial", mx: /\.sicurezzapostale\.it$/, pec: true },
+  { id: "postecert", name: "Poste Italiane", mx: /\.postecert\.it$/, pec: true },
   { id: "aruba", name: "Aruba", mx: /(^|\.)aruba\.it$/, spf: "_spf.aruba.it" },
   { id: "register", name: "Register.it", mx: /(^|\.)register\.it$/, spf: "spf.register.it" },
   { id: "qboxmail", name: "Qboxmail", mx: QBOX_MX, spf: "spf.qboxmail.com", spfOk: QBOX_SPF, spfFor: (mx) => `spf.${mx.match(QBOX_WHITE_LABEL)?.[1] ?? "qboxmail.com"}` },
@@ -215,7 +221,7 @@ async function analyzeName(zone: string, name: string, records: DnsRecord[], res
   const mode: MailReport["mode"] = realMx.length ? "mail" : nullMx && spfHardFail && spf.length === 1 ? "protected" : "none";
   const providerDef = PROVIDERS.find((p) => realMx.some((m) => p.mx.test(m.host)));
   const providerMx = providerDef && realMx.find((m) => providerDef.mx.test(m.host))!.host;
-  const provider = providerDef ? { id: providerDef.id, name: providerDef.name, spf: providerDef.spfFor?.(providerMx!) ?? providerDef.spf, dkim: providerDef.dkim } : null;
+  const provider = providerDef ? { id: providerDef.id, name: providerDef.name, spf: providerDef.spfFor?.(providerMx!) ?? providerDef.spf, dkim: providerDef.dkim, ...(providerDef.pec && { pec: true }) } : null;
 
   // MX
   if (nullMx && realMx.length) add({ id: "mx-null-mixed", level: "error", area: "mx" });
@@ -251,7 +257,8 @@ async function analyzeName(zone: string, name: string, records: DnsRecord[], res
   if (records.some((r) => r.type === "SPF" && at(r.name))) add({ id: "spf-type", level: "warning", area: "spf" });
   if (!spf.length) {
     // A subdomain that receives may not send at all: worth fixing, not an error.
-    if (mode === "mail") add({ id: "spf-missing", level: sub ? "warning" : "error", area: "spf", fix: "add-spf" });
+    if (mode === "mail" && provider?.pec) add({ id: "pec-no-spf", level: "ok", area: "spf", params: { provider: provider.name } });
+    else if (mode === "mail") add({ id: "spf-missing", level: sub ? "warning" : "error", area: "spf", fix: "add-spf" });
     else if (nullMx) add({ id: "spf-missing-nomail", level: "warning", area: "spf", fix: "protect-no-mail" });
   } else if (spf.length > 1) {
     add({ id: "spf-multiple", level: "error", area: "spf", params: { count: spf.length } });
@@ -313,7 +320,7 @@ async function analyzeName(zone: string, name: string, records: DnsRecord[], res
       else if (bits === 1024) add({ id: "dkim-1024", level: "info", area: "dkim", params: { selector } });
     }
   }
-  if (mode === "mail" && !sub) {
+  if (mode === "mail" && !sub && !provider?.pec) {
     if (!dkim.length) add({ id: "dkim-missing", level: "warning", area: "dkim", params: provider?.dkim ? { provider: provider.name, selectors: provider.dkim.join(", ") } : {} });
   }
 
