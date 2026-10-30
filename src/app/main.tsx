@@ -24,6 +24,8 @@ import { Setup } from "./pages/Setup";
 import { ZonePage } from "./pages/Zone";
 
 const LAST_ACCOUNT = "dpp:account";
+// The landing keeps the full title from index.html.
+const TITLE = document.title;
 
 function Login() {
   const t = useT();
@@ -98,6 +100,24 @@ function App() {
     document.querySelector('meta[name="robots"]')?.remove();
     if (!show) document.head.appendChild(Object.assign(document.createElement("meta"), { name: "robots", content: "noindex" }));
   }, [atLanding, setup.data]);
+
+  // The tab title follows the page: section, then domain or account, then Dash++.
+  useEffect(() => {
+    const account = "acc" in route ? me.data?.accounts.find((a) => a.id === route.acc)?.name : undefined;
+    const zoneTabs: Record<string, string> = { parking: t.zone.tabs.parking, redirects: t.zone.tabs.redirects, email: t.zone.tabs.mail, dns: t.zone.tabs.dns, history: t.zone.tabs.history };
+    const sections: Record<string, string> = { domains: t.nav.domains, redirects: t.nav.redirects, mail: t.nav.mail, groups: t.nav.groups, activity: t.nav.activity };
+    const parts =
+      atLanding && setup.data?.configured ? [TITLE]
+      : path.startsWith("/mcp") ? [t.mcp.title]
+      : isSetup ? [t.setup.title, "Dash++"]
+      : loginNeeded || loginError || isConnect ? ["Dash++"]
+      : route.page === "zone" ? [zoneTabs[route.tab], route.zone, "Dash++"]
+      : route.page === "parking" ? [new URLSearchParams(location.search).has("pages") ? t.parking.pages : t.nav.parking, account, "Dash++"]
+      : route.page === "home" ? [account, "Dash++"]
+      : "acc" in route ? [sections[route.page], account, "Dash++"]
+      : ["Dash++"];
+    document.title = parts.filter(Boolean).join(" · ");
+  }, [path, t, me.data, isSetup, isConnect, loginNeeded, loginError, atLanding, setup.data]);
 
   useEffect(() => {
     if (!me.data || isSetup || isConnect) return;
