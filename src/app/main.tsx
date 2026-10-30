@@ -16,6 +16,7 @@ import { McpInfo } from "./pages/McpInfo";
 import { Domains } from "./pages/Domains";
 import { Groups } from "./pages/Groups";
 import { Home } from "./pages/Home";
+import { Landing } from "./pages/Landing";
 import { Mail } from "./pages/Mail";
 import { Parking } from "./pages/Parking";
 import { Redirects } from "./pages/Redirects";
@@ -86,6 +87,17 @@ function App() {
   const isConnect = path.split("?")[0] === "/connect" || path.split("?")[0] === "/mcp";
   const me = useApi<Me>(isSetup || isConnect ? null : "/me");
   const route = parseRoute(path);
+  const loginError = new URLSearchParams(location.search).has("login_error");
+  // Signed out at the home page: the landing, unless Dash++ still has to be set up.
+  const atLanding = loginNeeded && route.page === "root" && !loginError;
+  const setup = useApi<{ configured: boolean }>(atLanding ? "/setup/state" : null);
+
+  // Only the landing may be indexed: everything else is behind sign-in.
+  useEffect(() => {
+    const show = atLanding && setup.data?.configured;
+    document.querySelector('meta[name="robots"]')?.remove();
+    if (!show) document.head.appendChild(Object.assign(document.createElement("meta"), { name: "robots", content: "noindex" }));
+  }, [atLanding, setup.data]);
 
   useEffect(() => {
     if (!me.data || isSetup || isConnect) return;
@@ -101,7 +113,9 @@ function App() {
 
   if (isConnect) return path.startsWith("/mcp") ? <McpInfo /> : <Connect />;
   if (isSetup) return <Setup standalone />;
-  if (loginNeeded || new URLSearchParams(location.search).has("login_error")) return <Login />;
+  if (atLanding && !setup.data) return <Loading />;
+  if (atLanding && setup.data?.configured) return <Landing />;
+  if (loginNeeded || loginError) return <Login />;
   if (me.error)
     return (
       <Container className="py-16">
