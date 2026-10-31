@@ -210,6 +210,15 @@ api.onError((e, c) => {
 
 const cf = (c: Ctx) => new CfApi(c.get("token"));
 
+/** For what Dash++ keeps on its own (not behind the user's token): only who can see the account on Cloudflare. */
+async function requireMember(c: Ctx, accountId: string) {
+  await cf(c)
+    .req("GET", `/accounts/${accountId}`)
+    .catch((e) => {
+      throw e instanceof CfError && e.notFound ? new CfError(403, e.errors) : e;
+    });
+}
+
 api.get("/me", async (c) => {
   const [accounts, tenants] = await Promise.all([cf(c).all<Account>("/accounts", 50), loadTenants(c.env.DB)]);
   const lastSync = await c.env.DB.prepare("SELECT started_at, finished_at, zones, changes, error FROM sync_runs ORDER BY id DESC LIMIT 1").first();
@@ -242,12 +251,14 @@ api.delete("/accounts/:acc/tenant", async (c) => {
 /** The account's own token for the background sync. */
 api.get("/accounts/:acc/background", async (c) => {
   const acc = c.req.param("acc");
+  await requireMember(c, acc);
   const row = await c.env.DB.prepare("SELECT sync_token IS NOT NULL AS configured, token_set_at, token_set_by FROM tenants WHERE account_id = ?").bind(acc).first<{ configured: number; token_set_at: number | null; token_set_by: string | null }>();
   return c.json({ enabled: !!row, configured: !!row?.configured, setAt: row?.token_set_at ?? null, setBy: row?.token_set_by ?? null, link: tokenLink(acc) });
 });
 
 api.put("/accounts/:acc/background", async (c) => {
   const acc = c.req.param("acc");
+  await requireMember(c, acc);
   if (!(await isTenant(c.env.DB, acc))) throw new Conflict("not-enabled");
   const token = String((await c.req.json<{ token?: string }>()).token ?? "").trim();
   if (!token) throw new Conflict("setup-token-missing");
@@ -266,6 +277,7 @@ api.put("/accounts/:acc/background", async (c) => {
 });
 
 api.delete("/accounts/:acc/background", async (c) => {
+  await requireMember(c, c.req.param("acc"));
   await setSyncToken(c.env, c.req.param("acc"), null, c.get("email"));
   return c.json({ ok: true });
 });
@@ -434,6 +446,7 @@ api.put("/zones/:zone/mail/dmarc", async (c) => {
 
 api.get("/accounts/:acc/activity", async (c) => {
   const acc = c.req.param("acc");
+  await requireMember(c, acc);
   const ids = new Set((await visibleZones(c, acc)).map((z) => z.id));
   const rows = await c.env.DB.prepare("SELECT * FROM changes WHERE account_id = ? ORDER BY detected_at DESC, id DESC LIMIT 500").bind(acc).all<{ zone_id: string }>();
   const log = await c.env.DB.prepare("SELECT * FROM audit WHERE account_id = ? ORDER BY at DESC LIMIT 200").bind(acc).all<{ zone_id: string | null }>();
