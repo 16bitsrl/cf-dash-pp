@@ -74,6 +74,8 @@ export const en = {
     never: "never",
     all: "All",
     openInCloudflare: "Open in Cloudflare",
+    openSite: "Open the site",
+    openAddress: (host: string) => `Open ${host} in a new tab`,
     deepDive: "Go deeper in Cloudflare",
     cantLoad: "Can't load the data",
     syncing: "Reading the domains from Cloudflare…",

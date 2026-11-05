@@ -74,6 +74,8 @@ export const it: Dict = {
     never: "mai",
     all: "Tutti",
     openInCloudflare: "Apri in Cloudflare",
+    openSite: "Apri il sito",
+    openAddress: (host: string) => `Apri ${host} in una nuova scheda`,
     deepDive: "Approfondisci in Cloudflare",
     cantLoad: "Non riesco a caricare i dati",
     syncing: "Sto leggendo i domini da Cloudflare…",

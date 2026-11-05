@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { ChangeList } from "../components/changes";
 import { DnsPanel } from "../components/dns";
 import { MailPanel, ParkingPanel, RedirectsPanel } from "../components/panels";
-import { Container, DashPill, ErrorState, LevelIcon, Loading, MailBadge, PageHeader, UsageBadge, ZoneStatus } from "../components/ui";
+import { Container, DashPill, SitePill, ErrorState, LevelIcon, Loading, MailBadge, PageHeader, UsageBadge, ZoneStatus } from "../components/ui";
 import { checkText, useT } from "../i18n";
 import { useApi, type ZoneDetail } from "../lib/api";
 import { dash, shortName, useFormat } from "../lib/format";
@@ -35,7 +35,12 @@ export function ZonePage({ acc, zoneName, tab }: { acc: string; zoneName: string
           </Breadcrumbs>
         }
         title={zoneName}
-        pill={<DashPill href={dash.zone(acc, zoneName)} />}
+        pill={
+          <span className="flex flex-wrap items-center gap-1.5">
+            <DashPill href={dash.zone(acc, zoneName)} />
+            <SitePill host={zoneName} />
+          </span>
+        }
         description={item ? <ZoneStatus status={item.status} paused={item.paused} /> : undefined}
         actions={
           <Button variant="secondary" icon={ArrowClockwiseIcon} loading={q.loading} onClick={q.reload} disabled={!item}>

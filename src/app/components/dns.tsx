@@ -1,5 +1,5 @@
 import { Badge, Banner, Button, Checkbox, ClipboardText, DropdownMenu, Input, InputArea, LayerCard, Pagination, Select, Switch, Table, TagInput, Tooltip } from "@cloudflare/kumo";
-import { CaretDownIcon, CaretUpIcon, DotsThreeIcon, DownloadSimpleIcon, LockSimpleIcon, MagnifyingGlassIcon, PencilSimpleIcon, PlusIcon, TrashIcon, UploadSimpleIcon, WarningIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CaretDownIcon, CaretUpIcon, DotsThreeIcon, DownloadSimpleIcon, LockSimpleIcon, MagnifyingGlassIcon, PencilSimpleIcon, PlusIcon, TrashIcon, UploadSimpleIcon, WarningIcon } from "@phosphor-icons/react";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { emptyInput, IMPORT_MAX_BYTES, inputFromRecord, parseZoneFile, previewImport, RECORD_TYPES, recordChanges, recordValue, relativeName, TTL_CHOICES, TYPE_SPECS, validateRecord, type Field, type FieldChange, type Invalid, type RecordInput } from "../../worker/lib/dns";
 import { displayRecords, PARK_ADDRESS, type DisplayRecord, type Rec } from "../../worker/lib/zone-state";
@@ -9,7 +9,7 @@ import { useApi, type ZoneDetail } from "../lib/api";
 import { dash } from "../lib/format";
 import { useMutation } from "../lib/hooks";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { DeepLink, EmptyState, TableCard } from "./ui";
+import { EmptyState, TableCard } from "./ui";
 
 type Mark = "worker" | "parking" | "dash";
 const markOf = (r: DisplayRecord): Mark | null => (r.worker !== undefined ? "worker" : r.type === "A" && r.content === PARK_ADDRESS ? "parking" : r.comment === "Dash++" ? "dash" : null);
@@ -112,7 +112,6 @@ export function DnsPanel({ z }: { z: ZoneDetail }) {
             <Button variant="primary" icon={PlusIcon} onClick={() => setEditor({})}>
               {t.dns.add}
             </Button>
-            <DeepLink href={dash.zone(z.zone.account.id, zone, "/dns/records")} />
           </div>
         </div>
       </div>
@@ -152,7 +151,9 @@ export function DnsPanel({ z }: { z: ZoneDetail }) {
                     <Table.Row key={r.key} variant={selected.has(r.id) && editable(r) ? "selected" : "default"}>
                       <Table.Cell>{editable(r) && <Checkbox aria-label={t.dns.select(r.name)} checked={selected.has(r.id)} onCheckedChange={(v) => toggle(r.id, !!v)} />}</Table.Cell>
                       <Table.Cell className="font-mono text-xs">{r.type}</Table.Cell>
-                      <Table.Cell className="max-w-[220px] break-all">{relativeName(zone, r.name)}</Table.Cell>
+                      <Table.Cell className="max-w-[220px] break-all">
+                        <RecordName zone={zone} r={r} />
+                      </Table.Cell>
                       <Table.Cell className="max-w-[440px]">
                         <RecordContent r={r} acc={z.zone.account.id} />
                       </Table.Cell>
@@ -188,7 +189,9 @@ export function DnsPanel({ z }: { z: ZoneDetail }) {
                   <div className="flex min-w-0 flex-1 flex-col gap-1">
                     <div className="flex items-baseline gap-2">
                       <span className="shrink-0 font-mono text-xs text-kumo-subtle">{r.type}</span>
-                      <span className="min-w-0 font-medium break-all">{relativeName(zone, r.name)}</span>
+                      <span className="min-w-0 font-medium break-all">
+                        <RecordName zone={zone} r={r} />
+                      </span>
                     </div>
                     <RecordContent r={r} acc={z.zone.account.id} />
                     <div className="flex flex-wrap items-center gap-x-3 text-xs text-kumo-subtle">
@@ -248,6 +251,19 @@ function ProxyStatus({ r }: { r: Rec }) {
     </Tooltip>
   ) : (
     <span className="text-kumo-subtle">{t.records.dnsOnly}</span>
+  );
+}
+
+/** The record's name; for addresses people visit (A, AAAA, CNAME, not wildcards) a link that opens it in a new tab. */
+function RecordName({ zone, r }: { zone: string; r: DisplayRecord }) {
+  const t = useT();
+  const label = relativeName(zone, r.name);
+  if (!["A", "AAAA", "CNAME"].includes(r.type) || r.name.includes("*")) return <>{label}</>;
+  return (
+    <a href={`https://${r.name}`} target="_blank" rel="noreferrer" title={t.common.openAddress(r.name)} className="group inline-flex items-baseline gap-1 hover:text-kumo-link hover:underline">
+      {label}
+      <ArrowSquareOutIcon size={12} className="shrink-0 translate-y-px text-kumo-subtle opacity-60 group-hover:opacity-100" />
+    </a>
   );
 }
 
@@ -390,7 +406,7 @@ function RecordDialog({ z, rec, onClose }: { z: ZoneDetail; rec?: Rec; onClose: 
             submit();
           }}
         >
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-[9rem_minmax(0,1fr)]">
+          <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-[9rem_minmax(0,1fr)]">
             <Select label={t.records.type} value={form.type} disabled={!!rec} onValueChange={(v) => setType(String(v))} items={Object.fromEntries(RECORD_TYPES.map((x) => [x, x]))} />
             <Input label={t.records.name} description={t.dns.nameHint(zone)} error={fieldError("name")} value={form.name} placeholder="@" autoCapitalize="none" autoCorrect="off" spellCheck={false} onChange={(e) => set({ name: e.target.value })} />
           </div>
@@ -425,7 +441,7 @@ function RecordDialog({ z, rec, onClose }: { z: ZoneDetail; rec?: Rec; onClose: 
             ))}
 
           {spec.data && (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
               {spec.data.map((f) => (
                 <DataField key={f.key} f={f} value={String(form.data[f.key] ?? "")} error={fieldError(f.key)} onChange={(v) => set({ data: { ...form.data, [f.key]: v } })} />
               ))}

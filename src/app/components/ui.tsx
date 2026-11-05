@@ -2,6 +2,7 @@ import { Badge, Banner, CloudflareLogo, Empty, Loader } from "@cloudflare/kumo";
 import {
   ArrowBendUpRightIcon,
   ArrowSquareOutIcon,
+  GlobeSimpleIcon,
   CheckCircleIcon,
   CheckIcon,
   CircleDashedIcon,
@@ -51,6 +52,18 @@ export function DashPill({ href }: { href: string }) {
     <a href={href} target="_blank" rel="noreferrer" aria-label={t.common.openInCloudflare} className="inline-flex items-center gap-1 rounded-full border border-kumo-line px-2 py-0.5 text-xs text-kumo-default hover:bg-kumo-tint">
       <CloudflareLogo variant="glyph" className="w-3.5" />
       <span className="hidden sm:inline">{t.common.openInCloudflare}</span>
+      <ArrowSquareOutIcon size={12} />
+    </a>
+  );
+}
+
+/** Opens the domain itself in a new tab, as a visitor would see it. */
+export function SitePill({ host }: { host: string }) {
+  const t = useT();
+  return (
+    <a href={`https://${host}`} target="_blank" rel="noreferrer" aria-label={t.common.openAddress(host)} className="inline-flex items-center gap-1 rounded-full border border-kumo-line px-2 py-0.5 text-xs text-kumo-default hover:bg-kumo-tint">
+      <GlobeSimpleIcon size={12} />
+      <span className="hidden sm:inline">{t.common.openSite}</span>
       <ArrowSquareOutIcon size={12} />
     </a>
   );
