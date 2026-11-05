@@ -10,7 +10,8 @@ export class ApiError extends Error {
     public code: string,
     public params: Record<string, string | number> = {},
   ) {
-    super(code);
+    // No message here: Error would keep it as its own property, hiding the translated one below.
+    super();
   }
   /** The message in the current language. */
   override get message() {

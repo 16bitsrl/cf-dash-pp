@@ -66,6 +66,7 @@ function dnsApi(method: string, zone: string, what: string, body: any, req: Requ
     return ok(dnssec[zone]);
   }
   if (what === "dns_settings") {
+    if (method === "PATCH" && zone === "z2") return fail(1003, "CNAME flattening is not available to this account or zone. Contact support for more information.");
     if (method === "PATCH") flattenAll[zone] = !!body.flatten_all_cnames;
     return ok({ flatten_all_cnames: !!flattenAll[zone], nameservers: { type: "cloudflare.standard" } });
   }
@@ -75,6 +76,9 @@ function dnsApi(method: string, zone: string, what: string, body: any, req: Requ
       const file = await (form.get("file") as File).text();
       imports.push({ zone, file, proxied: form.get("proxied") as string | null });
       const lines = file.split("\n").filter((l) => l.trim() && !l.startsWith(";"));
+      // Like Cloudflare: one line it can't read and the whole file is refused.
+      const bad = lines.findIndex((l) => l.split(/\s+/).length < 5);
+      if (bad >= 0) return fail(9209, `Error while parsing zone file: dns: not a TTL at line: ${bad + 1}:1.`);
       let added = 0;
       const messages: { code: number; message: string }[] = [];
       for (const l of lines) {
@@ -591,6 +595,13 @@ describe("zone files", () => {
     expect((await lastAudit())!.action).toBe("record.import");
   });
 
+  it("explains that Cloudflare refuses the whole file when a line can't be read", async () => {
+    const r = await call("owner@example.com", "POST", "/api/zones/z1/records/import", { file: `${FILE}nonsense here\n`, proxied: false });
+    expect(r.status).toBe(409);
+    expect(r.json).toEqual({ error: "import-invalid", params: { message: "Error while parsing zone file: dns: not a TTL at line: 3:1." } });
+    expect(records.z1 ?? []).toEqual([]);
+  });
+
   it("refuses an empty or too large file before reaching Cloudflare", async () => {
     const empty = await call("owner@example.com", "POST", "/api/zones/z1/records/import", { file: ";; nothing\n", proxied: true });
     expect(empty.json.error).toBe("import-empty");
@@ -646,5 +657,10 @@ describe("DNS settings of a domain", () => {
     expect(r.json.done).toEqual([{ op: "dns.flatten-all", value: "on" }]);
     expect(flattenAll.z1).toBe(true);
     expect((await lastAudit())!.action).toBe("dns.flatten-all");
+  });
+
+  it("say when flattening every CNAME isn't in the plan", async () => {
+    const r = await call("owner@example.com", "PATCH", "/api/zones/z2/dns-settings", { flattenAllCnames: true });
+    expect([r.status, r.json.error]).toEqual([409, "flatten-all-unavailable"]);
   });
 });

@@ -2,7 +2,8 @@ import { Breadcrumbs, Button, LayerCard, Tabs } from "@cloudflare/kumo";
 import { ArrowClockwiseIcon, CaretRightIcon, GlobeIcon } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 import { ChangeList } from "../components/changes";
-import { MailPanel, ParkingPanel, RecordsPanel, RedirectsPanel } from "../components/panels";
+import { DnsPanel } from "../components/dns";
+import { MailPanel, ParkingPanel, RedirectsPanel } from "../components/panels";
 import { Container, DashPill, ErrorState, LevelIcon, Loading, MailBadge, PageHeader, UsageBadge, ZoneStatus } from "../components/ui";
 import { checkText, useT } from "../i18n";
 import { useApi, type ZoneDetail } from "../lib/api";
@@ -57,7 +58,7 @@ export function ZonePage({ acc, zoneName, tab }: { acc: string; zoneName: string
             {active === "parking" && <ParkingPanel z={z} />}
             {active === "redirects" && <RedirectsPanel z={z} />}
             {active === "email" && <MailPanel z={z} />}
-            {active === "dns" && <RecordsPanel z={z} />}
+            {active === "dns" && <DnsPanel z={z} />}
             {active === "history" && <ChangeList changes={z.changes} acc={acc} />}
           </>
         )}

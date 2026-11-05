@@ -69,7 +69,12 @@ export async function importRecords(api: CfApi, data: ZoneData, file: string, pr
   const form = new FormData();
   form.append("file", new File([file], "zone.txt", { type: "text/plain" }));
   form.append("proxied", String(proxied));
-  const { result, messages } = await dns(api.formWithMessages<{ recs_added: number; total_records_parsed: number }>("POST", `/zones/${data.zone.id}/dns_records/import`, form));
+  const { result, messages } = await api.formWithMessages<{ recs_added: number; total_records_parsed: number }>("POST", `/zones/${data.zone.id}/dns_records/import`, form).catch((e) => {
+    // A line Cloudflare can't read: it refuses the whole file.
+    const unreadable = e instanceof CfError && e.errors.find((x) => x.code === 9209);
+    if (unreadable) throw new Conflict("import-invalid", { message: unreadable.message });
+    return dns(Promise.reject(e));
+  });
   const had = new Set(data.records.map((r) => r.id));
   const added = (await api.all<Rec>(`/zones/${data.zone.id}/dns_records`, 500)).filter((r) => !had.has(r.id));
   return [
@@ -112,6 +117,9 @@ export async function setDnssec(api: CfApi, zoneId: string, enable: boolean): Pr
 }
 
 export async function setFlattenAll(api: CfApi, zoneId: string, on: boolean): Promise<Done[]> {
-  await api.req("PATCH", `/zones/${zoneId}/dns_settings`, { flatten_all_cnames: on });
+  await api.req("PATCH", `/zones/${zoneId}/dns_settings`, { flatten_all_cnames: on }).catch((e) => {
+    if (e instanceof CfError && e.errors.some((x) => /flattening is not available/i.test(x.message))) throw new Conflict("flatten-all-unavailable");
+    throw e;
+  });
   return [{ op: "dns.flatten-all", value: on ? "on" : "off" }];
 }
