@@ -175,7 +175,10 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
             </DropdownMenu.Content>
           </DropdownMenu>
         </header>
-        <main className="flex-1 pb-16">{children}</main>
+        <main className="flex-1 pb-16">
+          {install.mode && <InstallHint onInstall={() => (install.mode === "prompt" ? install.prompt() : setIosSteps(true))} />}
+          {children}
+        </main>
         <QuickSearch me={me} acc={route.acc} open={searching} setOpen={setSearching} />
         <IosInstall open={iosSteps} onOpenChange={setIosSteps} />
       </div>
@@ -190,6 +193,48 @@ function MobileMenu() {
   const { isMobile, setOpenMobile } = useSidebar();
   useEffect(() => setOpenMobile(false), [path, setOpenMobile]);
   return isMobile ? <Button variant="ghost" size="sm" shape="square" icon={<ListIcon size={20} />} aria-label={t.nav.menu} onClick={() => setOpenMobile(true)} /> : null;
+}
+
+const HINT_KEY = "dpp:install-hint";
+
+/** On phones and tablets only: a reminder that Dash++ can be installed, until it is or the user says not now. */
+function InstallHint({ onInstall }: { onInstall: () => void }) {
+  const t = useT();
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return !window.matchMedia("(pointer: coarse)").matches || localStorage.getItem(HINT_KEY) === "dismissed";
+    } catch {
+      return false;
+    }
+  });
+  if (hidden) return null;
+  function later() {
+    try {
+      localStorage.setItem(HINT_KEY, "dismissed");
+    } catch {}
+    setHidden(true);
+  }
+  return (
+    <div className="px-4 pt-4 md:px-6">
+      <div className="flex items-start gap-3 rounded-lg border border-kumo-hairline bg-kumo-base p-3">
+        <img src="/icons/icon-192.png" alt="" className="size-10 shrink-0 rounded-[10px]" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          <div className="text-sm">
+            <p className="font-medium text-kumo-default">{t.nav.installHintTitle}</p>
+            <p className="text-kumo-subtle">{t.nav.installHintText}</p>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="primary" onClick={onInstall}>
+              {t.nav.install}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={later}>
+              {t.nav.installHintLater}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Safari on iPhone and iPad can't install by itself: the two steps, with the icons the user will see. */

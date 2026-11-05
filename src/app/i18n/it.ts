@@ -83,6 +83,9 @@ export const it: Dict = {
   nav: {
     install: "Installa l'app",
     installTitle: "Installa Dash++",
+    installHintTitle: "Dash++ sul telefono",
+    installHintText: "Aggiungila alla schermata Home: si apre a tutto schermo, come un'app.",
+    installHintLater: "Non ora",
     installIos: "Su iPhone e iPad aggiungi Dash++ alla schermata Home: si apre a tutto schermo, come un'app.",
     installStep1: "In Safari tocca Condividi: il quadrato con la freccia, oppure ••• e poi Condividi.",
     installStep2: "Scegli \"Aggiungi alla schermata Home\" (se non la vedi, tocca la freccia per altre azioni), poi Aggiungi.",

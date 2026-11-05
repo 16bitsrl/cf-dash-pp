@@ -83,6 +83,9 @@ export const en = {
   nav: {
     install: "Install the app",
     installTitle: "Install Dash++",
+    installHintTitle: "Dash++ on your phone",
+    installHintText: "Add it to the Home Screen: it opens full screen, like an app.",
+    installHintLater: "Not now",
     installIos: "On iPhone and iPad, add Dash++ to the Home Screen: it opens full screen, like an app.",
     installStep1: "In Safari tap Share: the square with the arrow, or ••• and then Share.",
     installStep2: "Choose \"Add to Home Screen\" (if you don't see it, tap the arrow for more actions), then Add.",
