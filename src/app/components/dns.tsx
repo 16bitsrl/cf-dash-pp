@@ -766,7 +766,7 @@ function DnsSettingsPanel({ z }: { z: ZoneDetail }) {
           </div>
         </SettingCard>
 
-        <SettingCard title={t.dns.dnssec} hint={t.dns.dnssecHint} aside={d ? <Badge variant={DNSSEC_BADGE[d.status] ?? "neutral"}>{t.dns.dnssecStatus[d.status] ?? d.status}</Badge> : <Badge variant="neutral" className="invisible" aria-hidden>{t.dns.dnssecStatus.active}</Badge>}>
+        <SettingCard title={t.dns.dnssec} hint={t.dns.dnssecHint} aside={d && <Badge variant={DNSSEC_BADGE[d.status] ?? "neutral"}>{t.dns.dnssecStatus[d.status] ?? d.status}</Badge>}>
           {!s ? null : !d ? (
             <Unavailable error={s.dnssecError} />
           ) : (

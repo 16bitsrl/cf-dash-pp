@@ -41,7 +41,7 @@ export function ZonePage({ acc, zoneName, tab }: { acc: string; zoneName: string
             <SitePill host={zoneName} />
           </span>
         }
-        description={item ? <ZoneStatus status={item.status} paused={item.paused} /> : undefined}
+        description={item ? <ZoneStatus status={item.status} paused={item.paused} /> : <span className="invisible" aria-hidden><ZoneStatus status="active" /></span>}
         actions={
           <Button variant="secondary" icon={ArrowClockwiseIcon} loading={q.loading} onClick={q.reload} disabled={!item}>
             {t.common.reload}
