@@ -137,8 +137,8 @@ export type Usage = "parked" | "parking-partial" | "redirect" | "site" | "empty"
 
 export type ZoneListItem = { id: string; name: string; status: string; paused: boolean; plan: string | null; cached: CachedZone | null };
 export type ParkStatus = { published: boolean; legacy: string[] } | null;
-export type ZoneList = { park: ParkStatus; zones: ZoneListItem[] };
-export type ParkInfo = { status: NonNullable<ParkStatus>; settings: ParkSettings; publishedAt: number | null; updatedAt: number | null; updatedBy: string | null };
+export type ZoneList = { park: ParkStatus; canPark: boolean; zones: ZoneListItem[] };
+export type ParkInfo = { status: NonNullable<ParkStatus>; settings: ParkSettings; publishedAt: number | null; updatedAt: number | null; updatedBy: string | null; canManage: boolean };
 export type Group = { id: string; name: string; zones: string[] };
 export type Done = { op: string; name?: string; value?: string };
 
@@ -171,6 +171,7 @@ export type ZoneDetail = {
   usage: Usage;
   mail: MailReport;
   park: ParkStatus;
+  canPark: boolean;
   changes: Change[];
 };
 

@@ -220,7 +220,7 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
               <Button
                 variant="primary"
                 loading={busy}
-                disabled={s.pages.some((p) => p.brand && (!p.brand.name.trim() || badSite(p.brand)))}
+                disabled={!info.canManage || s.pages.some((p) => p.brand && (!p.brand.name.trim() || badSite(p.brand)))}
                 onClick={async () => {
                   if (await run("PUT", `/accounts/${acc}/park`, { ...s, assign: info.settings.assign }, t.parking.published)) onSaved();
                 }}
@@ -228,6 +228,8 @@ function PageSettings({ acc, info, onSaved, sample, parked, initialPage }: { acc
                 {t.parking.publish}
               </Button>
               <span className="text-sm text-kumo-subtle">{info.publishedAt ? t.parking.publishedAt(f.ago(info.publishedAt), info.updatedBy ?? "") : t.parking.neverPublished}</span>
+              {!info.canManage && <span className="text-sm text-kumo-subtle">{t.parking.onlyAdmins}</span>}
+              {!info.canManage && <span className="text-sm text-kumo-subtle">{t.parking.onlyAdmins}</span>}
             </div>
           </div>
           <div className="flex flex-col gap-3">
@@ -296,7 +298,7 @@ export function Parking({ acc }: { acc: string }) {
   const picked = zones.filter((z) => selected.has(z.id));
   const toPark = picked.filter((z) => z.cached?.usage === "empty");
   const toRepage = picked.filter(isParked);
-  const manyPages = !!settings && settings.pages.length > 1;
+  const manyPages = !!settings && settings.pages.length > 1 && !!park.data?.canManage;
   const allSelected = zones.length > 0 && zones.every((z) => selected.has(z.id));
   const toggle = (id: string) => setSelected((s) => (s.has(id) ? new Set([...s].filter((x) => x !== id)) : new Set([...s, id])));
 
@@ -380,7 +382,7 @@ export function Parking({ acc }: { acc: string }) {
               {picked.length > 0 && (
                 <div className="flex items-center gap-3">
                   <span className="text-sm text-kumo-subtle">{t.domains.selected(picked.length)}</span>
-                  {toPark.length > 0 && (
+                  {toPark.length > 0 && data.canPark && (
                     <Button
                       variant="secondary"
                       onClick={() => {
@@ -446,10 +448,9 @@ export function Parking({ acc }: { acc: string }) {
                           </Table.Cell>
                         )}
                         <Table.Cell className="text-right">
-                          {z.cached?.usage === "empty" && park.error?.code !== "forbidden" ? (
+                          {z.cached?.usage === "empty" && data.canPark ? (
                             <Button
                               size="sm"
-                              disabled={!park.data}
                               variant="secondary"
                               onClick={() => {
                                 setProtectMail(z.cached?.mail.mode !== "mail");

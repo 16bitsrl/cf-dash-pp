@@ -13,20 +13,61 @@ const BASE = "https://dash.example.com";
 const TENANT = "a".repeat(32);
 const OTHER = "b".repeat(32);
 
-// Who each token is on Cloudflare: their accounts and the zones in each.
-const CF_USERS: Record<string, { accounts: string[]; zones: { id: string; name: string; account: string }[] }> = {
-  "tok-owner": { accounts: [TENANT], zones: [{ id: "z1", name: "tenant.it", account: TENANT }] },
-  "tok-stranger": { accounts: [OTHER], zones: [{ id: "z9", name: "other.it", account: OTHER }] },
+// Who each token is on Cloudflare: their accounts and the zones in each. `admin`: accounts they
+// manage (account settings edit); without it they only have roles on some domains of the account.
+type CfUser = { accounts: string[]; admin?: string[]; zones: { id: string; name: string; account: string }[] };
+const CF_USERS: Record<string, CfUser> = {
+  "tok-owner": { accounts: [TENANT], admin: [TENANT], zones: [{ id: "z1", name: "tenant.it", account: TENANT }, { id: "z2", name: "group.it", account: TENANT }] },
+  // A member with a role on the domains of one group only (group.it), nothing at account level.
+  "tok-domains": { accounts: [TENANT], zones: [{ id: "z2", name: "group.it", account: TENANT }] },
+  "tok-stranger": { accounts: [OTHER], admin: [OTHER], zones: [{ id: "z9", name: "other.it", account: OTHER }] },
+  // The account's background token: reads everything in the account.
+  "sync-secret": { accounts: [TENANT], zones: [] },
 };
+
+// What exists on Cloudflare: Workers of the account, routes and records of each zone.
+const PARK_WORKER = "dash-plus-plus-park";
+let scripts: string[] = [];
+let routes: Record<string, { id: string; pattern: string; script: string }[]> = {};
+let records: Record<string, { id: string; type: string; name: string; content: string; proxied: boolean }[]> = {};
 
 const ok = (result: unknown, info?: object) => Response.json({ success: true, errors: [], result, ...(info && { result_info: info }) });
 const denied = () => Response.json({ success: false, errors: [{ code: 9109, message: "Unauthorized to access requested resource" }], result: null }, { status: 403 });
+const notFound = () => Response.json({ success: false, errors: [{ code: 10000, message: "not found" }], result: null }, { status: 404 });
 
-function cloudflare(url: URL, token: string): Response {
+function cloudflare(url: URL, token: string, method: string, body: any): Response {
   const user = CF_USERS[token];
   if (!user) return Response.json({ success: false, errors: [{ code: 1000, message: "Invalid API Token" }] }, { status: 401 });
   const p = url.pathname.replace("/client/v4", "");
+  const accountWide = (acc: string) => token === "sync-secret" || !!user.admin?.includes(acc);
   if (p === "/user/tokens/verify") return ok({ status: "active" });
+  if (p === "/memberships") {
+    const list = user.accounts.map((id) => ({ id: `m-${id}`, status: "accepted", account: { id, name: "" }, permissions: { organization: { read: true, edit: !!user.admin?.includes(id) } } }));
+    return ok(list, { page: 1, per_page: 50, count: list.length });
+  }
+  let w = p.match(/^\/accounts\/([^/]+)\/workers\/(scripts|domains)$/);
+  if (w) return !accountWide(w[1]) ? denied() : ok(w[2] === "scripts" ? scripts.map((id) => ({ id })) : []);
+  // The parking Worker's content: none of our settings in it yet.
+  w = p.match(/^\/accounts\/([^/]+)\/workers\/scripts\/[^/]+\/content\/v2$/);
+  if (w) return !accountWide(w[1]) ? denied() : notFound();
+  w = p.match(/^\/zones\/([^/]+)\/(workers\/routes|dns_records|rulesets\/phases\/[^/]+\/entrypoint)$/);
+  if (w) {
+    const [, zone, what] = w;
+    if (!user.zones.some((z) => z.id === zone)) return denied();
+    if (what.startsWith("rulesets")) return notFound();
+    if (what === "workers/routes") {
+      if (method === "GET") return ok(routes[zone] ?? []);
+      // Like Cloudflare: a route can only point to a Worker that exists in the account.
+      if (!scripts.includes(body.script)) return Response.json({ success: false, errors: [{ code: 10019, message: "script not found" }] }, { status: 400 });
+      const r = { id: `r${Math.random()}`, pattern: body.pattern, script: body.script };
+      (routes[zone] ??= []).push(r);
+      return ok(r);
+    }
+    if (method === "GET") return ok(records[zone] ?? [], { page: 1, per_page: 500, count: (records[zone] ?? []).length });
+    const r = { id: `d${Math.random()}`, ...body };
+    (records[zone] ??= []).push(r);
+    return ok(r);
+  }
   if (p.match(/^\/accounts\/[^/]+\/tokens\/verify$/)) return denied();
   if (p === "/accounts") return ok(user.accounts.map((id) => ({ id, name: `acc ${id.slice(0, 3)}` })), { page: 1, per_page: 50, count: user.accounts.length });
   let m = p.match(/^\/accounts\/([^/]+)$/);
@@ -73,12 +114,16 @@ beforeAll(async () => {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init);
     const url = new URL(req.url);
-    if (url.hostname === "api.cloudflare.com") return cloudflare(url, req.headers.get("authorization")?.replace(/^Bearer /, "") ?? "");
+    if (url.hostname === "api.cloudflare.com") {
+      const body = req.method === "GET" ? null : await req.clone().json().catch(() => null);
+      return cloudflare(url, req.headers.get("authorization")?.replace(/^Bearer /, "") ?? "", req.method, body);
+    }
     if (url.hostname === "cloudflare-dns.com") return Response.json({ Answer: [] });
     return realFetch(input, init);
   });
   await signIn("owner@example.com", "tok-owner");
   await signIn("stranger@example.com", "tok-stranger");
+  await signIn("domains@example.com", "tok-domains");
 });
 
 afterAll(async () => {
@@ -89,6 +134,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await enableTenant(env.DB, { id: TENANT, name: "Tenant" }, "admin@example.com");
   await setSyncToken(env, TENANT, "sync-secret", "owner@example.com");
+  scripts = [PARK_WORKER];
+  routes = {};
+  records = {};
 });
 
 const syncTokenSet = async () => !!(await env.DB.prepare("SELECT sync_token FROM tenants WHERE account_id = ?").bind(TENANT).first<{ sync_token: string | null }>())?.sync_token;
@@ -123,6 +171,66 @@ describe("background token of an enabled account", () => {
     const r = await call("owner@example.com", "DELETE", `/api/accounts/${TENANT}/background`);
     expect(r.status).toBe(200);
     expect(await syncTokenSet()).toBe(false);
+  });
+});
+
+describe("a member with roles on some domains only", () => {
+  it("sees the background token but cannot manage it", async () => {
+    const member = await call("domains@example.com", "GET", `/api/accounts/${TENANT}/background`);
+    expect(member.status).toBe(200);
+    expect(member.json.canManage).toBe(false);
+    const owner = await call("owner@example.com", "GET", `/api/accounts/${TENANT}/background`);
+    expect(owner.json.canManage).toBe(true);
+  });
+
+  it("cannot remove the background token", async () => {
+    const r = await call("domains@example.com", "DELETE", `/api/accounts/${TENANT}/background`);
+    expect(r.status).toBe(403);
+    expect(await syncTokenSet()).toBe(true);
+  });
+
+  it("cannot replace the background token", async () => {
+    const r = await call("domains@example.com", "PUT", `/api/accounts/${TENANT}/background`, { token: "tok-domains" });
+    expect(r.status).toBe(403);
+    const row = await env.DB.prepare("SELECT token_set_by FROM tenants WHERE account_id = ?").bind(TENANT).first<{ token_set_by: string }>();
+    expect(row?.token_set_by).toBe("owner@example.com");
+  });
+
+  it("cannot change the parking pages of the account", async () => {
+    const r = await call("domains@example.com", "PUT", `/api/accounts/${TENANT}/park`, { pages: [], defaultPage: "", assign: {} });
+    expect(r.status).toBe(403);
+  });
+
+  it("can park one of their domains", async () => {
+    const z = await call("domains@example.com", "GET", "/api/zones/z2");
+    expect(z.status).toBe(200);
+    expect(z.json.canPark).toBe(true);
+    const r = await call("domains@example.com", "POST", "/api/zones/z2/parking", { enable: true });
+    expect(r.status).toBe(200);
+    expect(routes.z2.map((x) => [x.pattern, x.script])).toEqual([
+      ["group.it/*", PARK_WORKER],
+      ["www.group.it/*", PARK_WORKER],
+    ]);
+    expect(r.json.zone.parking.state).toBe("parked");
+  });
+
+  it("is told to ask an administrator when the account has no parking page yet", async () => {
+    scripts = [];
+    const z = await call("domains@example.com", "GET", "/api/zones/z2");
+    expect(z.json.canPark).toBe(false);
+    const r = await call("domains@example.com", "POST", "/api/zones/z2/parking", { enable: true });
+    expect(r.status).toBe(409);
+    expect(r.json.error).toBe("park-not-ready");
+    expect(records.z2 ?? []).toEqual([]);
+  });
+});
+
+describe("parking pages of an account", () => {
+  it("only an administrator of the account can change them", async () => {
+    // The owner manages the account: the parking page is published again.
+    const page = await call("owner@example.com", "GET", `/api/accounts/${TENANT}/park`);
+    expect(page.status).toBe(200);
+    expect(page.json.canManage).toBe(true);
   });
 });
 

@@ -72,7 +72,7 @@ export function ParkingPanel({ z }: { z: ZoneDetail }) {
             })}
           </ul>
         )}
-        {p.state !== "off" && z.park && pages.settings && (
+        {p.state !== "off" && z.park && pages.settings && pages.park.data?.canManage && (
           <div className="flex flex-wrap items-end gap-3">
             <Select className="w-72" label={t.parking.pageColumn} value={pages.pageOf(name)} onValueChange={(v) => pages.setPageOf(name, String(v))} items={pages.items} disabled={pages.busy} />
             <a href={parkingPagePath(acc, pages.pageOf(name))} className="pb-2 text-sm text-kumo-link hover:underline">
@@ -81,11 +81,11 @@ export function ParkingPanel({ z }: { z: ZoneDetail }) {
           </div>
         )}
         {z.routesError && <Banner variant="alert" icon={<WarningIcon weight="fill" />} description={errorText(t, z.routesError)} />}
-        {!z.park && <Banner variant="secondary" icon={<InfoIcon weight="fill" />} description={t.parking.noAccess} />}
+        {!z.canPark && p.state !== "parked" && <Banner variant="secondary" icon={<InfoIcon weight="fill" />} description={t.parking.notReady} />}
         {p.state === "off" && blocked && <Banner variant="secondary" icon={<InfoIcon weight="fill" />} description={blocked} />}
         <div className="flex flex-wrap gap-2">
           {p.state !== "parked" && (
-            <Button variant="primary" disabled={!z.park || (p.state === "off" && !!blocked)} onClick={() => setDialog("enable")}>
+            <Button variant="primary" disabled={!z.canPark || (p.state === "off" && !!blocked)} onClick={() => setDialog("enable")}>
               {p.state === "partial" ? t.parking.complete : t.parking.park}
             </Button>
           )}

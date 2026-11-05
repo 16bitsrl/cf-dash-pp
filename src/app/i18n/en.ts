@@ -291,6 +291,8 @@ export const en = {
     versionLoaded: (n: number) => `Version ${n} loaded`,
     versionLoadedHint: "Check the preview, then save and publish to restore it.",
     noAccess: "You don't have permission to manage the parking page of this account.",
+    notReady: "This account has no parking page yet. Ask an administrator of the account to set it up.",
+    onlyAdmins: "Only administrators of the account can change the parking pages.",
   },
   redirects: {
     title: "Redirects",
@@ -518,6 +520,7 @@ export const en = {
   doneNothing: "Everything was already in place.",
   failed: "Operation failed",
   background: {
+    onlyAdmins: "Only administrators of the account can change it.",
     title: "Background refresh",
     text: "With a read-only token of this account, Dash++ re-reads its domains every 15 minutes and also records changes made outside Dash++.",
     step1: "Create the token in Cloudflare: name and permissions are already filled in, just confirm.",
@@ -547,6 +550,7 @@ export const en = {
     "redirect-exists": (p: P) => `There's already a redirect for ${p.hosts} to ${p.target}.`,
     "redirect-not-found": "Redirect not found: maybe it was already removed.",
     "park-version-empty": "This version has no pages to restore.",
+    "park-not-ready": "This account has no parking page yet. Ask an administrator of the account to set it up.",
     "duplicate-records": (p: P) => `There are ${p.count} ${p.name} records of the same kind: fix them by hand first.`,
     "receives-mail": "The domain receives email: this protection would block it.",
     "dmarc-exists": "DMARC is already there.",

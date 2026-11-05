@@ -292,6 +292,8 @@ export const it: Dict = {
     versionLoaded: (n: number) => `Versione ${n} caricata`,
     versionLoadedHint: "Controlla l'anteprima, poi salva e pubblica per ripristinarla.",
     noAccess: "Non hai i permessi per gestire la pagina di parcheggio di questo account.",
+    notReady: "Questo account non ha ancora una pagina di parcheggio. Chiedi a un amministratore dell'account di prepararla.",
+    onlyAdmins: "Solo gli amministratori dell'account possono modificare le pagine di parcheggio.",
   },
   redirects: {
     title: "Redirect",
@@ -519,6 +521,7 @@ export const it: Dict = {
   doneNothing: "Era già tutto a posto.",
   failed: "Operazione non riuscita",
   background: {
+    onlyAdmins: "Solo gli amministratori dell'account possono modificarlo.",
     title: "Aggiornamento in background",
     text: "Con un token di sola lettura di questo account, Dash++ rilegge i suoi domini ogni 15 minuti e registra anche le modifiche fatte fuori da Dash++.",
     step1: "Crea il token in Cloudflare: nome e permessi sono già compilati, basta confermare.",
@@ -548,6 +551,7 @@ export const it: Dict = {
     "redirect-exists": (p: P) => `C'è già un redirect per ${p.hosts} verso ${p.target}.`,
     "redirect-not-found": "Redirect non trovato: forse è già stato tolto.",
     "park-version-empty": "Questa versione non contiene pagine da ripristinare.",
+    "park-not-ready": "Questo account non ha ancora una pagina di parcheggio. Chiedi a un amministratore dell'account di prepararla.",
     "duplicate-records": (p: P) => `Ci sono ${p.count} record ${p.name} dello stesso tipo: sistemali a mano prima.`,
     "receives-mail": "Il dominio riceve posta: questa protezione la bloccherebbe.",
     "dmarc-exists": "Il DMARC c'è già.",

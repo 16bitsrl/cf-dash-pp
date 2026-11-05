@@ -219,6 +219,17 @@ async function requireMember(c: Ctx, accountId: string) {
     });
 }
 
+/** Whether the user manages the account (account settings, not only some of its domains). */
+async function managesAccount(c: Ctx, accountId: string) {
+  const list = await cf(c).all<{ account: { id: string }; status: string; permissions?: { organization?: { edit?: boolean } } }>("/memberships", 50);
+  return list.some((m) => m.account.id === accountId && m.status === "accepted" && m.permissions?.organization?.edit === true);
+}
+
+/** For what affects the whole account in Dash++: its background token, its parking pages. */
+async function requireManager(c: Ctx, accountId: string) {
+  if (!(await managesAccount(c, accountId))) throw new CfError(403, []);
+}
+
 api.get("/me", async (c) => {
   const [accounts, tenants] = await Promise.all([cf(c).all<Account>("/accounts", 50), loadTenants(c.env.DB)]);
   const lastSync = await c.env.DB.prepare("SELECT started_at, finished_at, zones, changes, error FROM sync_runs ORDER BY id DESC LIMIT 1").first();
@@ -252,13 +263,14 @@ api.delete("/accounts/:acc/tenant", async (c) => {
 api.get("/accounts/:acc/background", async (c) => {
   const acc = c.req.param("acc");
   await requireMember(c, acc);
+  const canManage = await managesAccount(c, acc);
   const row = await c.env.DB.prepare("SELECT sync_token IS NOT NULL AS configured, token_set_at, token_set_by FROM tenants WHERE account_id = ?").bind(acc).first<{ configured: number; token_set_at: number | null; token_set_by: string | null }>();
-  return c.json({ enabled: !!row, configured: !!row?.configured, setAt: row?.token_set_at ?? null, setBy: row?.token_set_by ?? null, link: tokenLink(acc) });
+  return c.json({ enabled: !!row, configured: !!row?.configured, setAt: row?.token_set_at ?? null, setBy: row?.token_set_by ?? null, link: tokenLink(acc), canManage });
 });
 
 api.put("/accounts/:acc/background", async (c) => {
   const acc = c.req.param("acc");
-  await requireMember(c, acc);
+  await requireManager(c, acc);
   if (!(await isTenant(c.env.DB, acc))) throw new Conflict("not-enabled");
   const token = String((await c.req.json<{ token?: string }>()).token ?? "").trim();
   if (!token) throw new Conflict("setup-token-missing");
@@ -277,7 +289,7 @@ api.put("/accounts/:acc/background", async (c) => {
 });
 
 api.delete("/accounts/:acc/background", async (c) => {
-  await requireMember(c, c.req.param("acc"));
+  await requireManager(c, c.req.param("acc"));
   await setSyncToken(c.env, c.req.param("acc"), null, c.get("email"));
   return c.json({ ok: true });
 });
@@ -307,6 +319,7 @@ api.get("/accounts/:acc/zones", async (c) => {
   const byId = new Map(cache.results.map((r) => [r.id, r]));
   return c.json({
     park,
+    canPark: !!park || (await parkReady(c, acc)),
     zones: zones
       .map((z) => {
         const r = byId.get(z.id);
@@ -348,6 +361,12 @@ api.post("/accounts/:acc/sync", async (c) => {
   return c.json({ zones: zones.length, failed: res.filter((r) => r.status === "rejected").length });
 });
 
+/** Whether the account's parking page is published, read with its background token (for users who can't see Workers). */
+async function parkReady(c: Ctx, accountId: string) {
+  const token = (await tenantTokens(c.env)).find((t) => t.id === accountId)?.token ?? (await getConfig(c.env)).serviceToken;
+  return !!token && !!(await parkStatus(new CfApi(token), accountId))?.published;
+}
+
 async function zonePayload(c: Ctx, zoneId: string) {
   const { data, mail } = await syncZone(c.env.DB, cf(c), zoneId, { source: "external" });
   const [changes, park] = await Promise.all([
@@ -367,6 +386,7 @@ async function zonePayload(c: Ctx, zoneId: string) {
     usage: data.usage,
     mail,
     park,
+    canPark: !!park || (await parkReady(c, data.zone.account.id)),
     changes: changes.results,
   };
 }
@@ -393,9 +413,13 @@ api.post("/zones/:zone/parking", async (c) => {
   return mutate(c, body.enable ? "parking.enable" : "parking.disable", async ({ data, mail }) => {
     if (!body.enable) return disableParking(cf(c), data, !!body.removeRecords);
     const done: Done[] = [];
-    const status = await parkStatus(cf(c), data.zone.account.id);
-    if (!status) throw new Conflict("forbidden");
-    if (await ensureParkingPublished(c.env.DB, cf(c), data.zone.account.id, status.published, c.get("email"))) done.push({ op: "park.publish" });
+    const acc = data.zone.account.id;
+    const status = await parkStatus(cf(c), acc);
+    // Who manages only some domains can't see the account's Workers: they can still park a domain
+    // on the parking page that is already there, but not publish it the first time.
+    if (!status) {
+      if (!(await parkReady(c, acc))) throw new Conflict("park-not-ready");
+    } else if (await ensureParkingPublished(c.env.DB, cf(c), acc, status.published, c.get("email"))) done.push({ op: "park.publish" });
     return [...done, ...(await enableParking(cf(c), data, !!body.protectMail, mail))];
   });
 });
@@ -465,12 +489,14 @@ async function requirePark(c: Ctx) {
 api.get("/accounts/:acc/park", async (c) => {
   const acc = c.req.param("acc");
   const status = await requirePark(c);
-  const { settings, publishedAt, updatedAt, updatedBy } = await loadParkSettings(c.env.DB, cf(c), acc);
-  return c.json({ status, settings, publishedAt, updatedAt, updatedBy });
+  const [{ settings, publishedAt, updatedAt, updatedBy }, canManage] = await Promise.all([loadParkSettings(c.env.DB, cf(c), acc), managesAccount(c, acc)]);
+  return c.json({ status, settings, publishedAt, updatedAt, updatedBy, canManage });
 });
 
+// The parking pages are the same for every parked domain of the account: only its administrators change them.
 api.put("/accounts/:acc/park", async (c) => {
   const acc = c.req.param("acc");
+  await requireManager(c, acc);
   await requirePark(c);
   const clean = cleanParkSettings(await c.req.json<ParkSettings>());
   await saveAndPublish(cf(c), acc, clean, c.get("email"));
