@@ -17,6 +17,10 @@ function ctx(answers: Record<string, unknown>, zones: Record<string, string> = {
       if (!zones[domain]) throw new ToolError("zone-not-found", { domain });
       return zones[domain];
     },
+    async text(path) {
+      calls.push({ method: "GET", path });
+      return String(answers[`TEXT ${path}`] ?? "");
+    },
   };
   return { c, calls };
 }
@@ -106,6 +110,54 @@ describe("handleRpc", () => {
     const r = await call(c, "add_redirect", { domain: "acme.it" });
     expect(r.result.isError).toBe(true);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("DNS record tools", () => {
+  const zone = { zone: { id: "z1", name: "acme.it" }, records: [{ id: "r1", type: "A", name: "www.acme.it", content: "192.0.2.4", proxied: true, ttl: 1, comment: "web", tags: [], modified_on: "v1" }], changes: [] };
+
+  it("are listed, and the ones that delete are marked as such", async () => {
+    const r = (await handleRpc({ jsonrpc: "2.0", id: 2, method: "tools/list" }, ctx({}).c)) as { result: { tools: { name: string; annotations: { readOnlyHint: boolean; destructiveHint: boolean } }[] } };
+    const byName = Object.fromEntries(r.result.tools.map((t) => [t.name, t]));
+    expect(byName.add_dns_record.annotations.readOnlyHint).toBe(false);
+    expect(byName.update_dns_record.annotations.destructiveHint).toBe(true);
+    expect(byName.delete_dns_records.annotations.destructiveHint).toBe(true);
+    expect(byName.export_dns_records.annotations.readOnlyHint).toBe(true);
+  });
+
+  it("add_dns_record sends the record with Cloudflare's defaults", async () => {
+    const { c, calls } = ctx({ "POST /zones/z1/records": { done: [{ op: "record.add" }], zone } });
+    const out = json(await call(c, "add_dns_record", { domain: "acme.it", type: "mx", name: "@", content: "mx.example.net", priority: 10 }));
+    expect(calls[0]).toEqual({ method: "POST", path: "/zones/z1/records", body: { record: { type: "MX", name: "@", content: "mx.example.net", data: {}, priority: 10, proxied: false, ttl: 1, comment: "", tags: [], settings: {} } } });
+    expect(out.done).toEqual([{ op: "record.add" }]);
+  });
+
+  it("update_dns_record changes only the given fields, on the version it read", async () => {
+    const { c, calls } = ctx({ "GET /zones/z1": zone, "PATCH /zones/z1/records/r1": { done: [], zone } });
+    await call(c, "update_dns_record", { domain: "acme.it", record_id: "r1", content: "192.0.2.5" });
+    expect(calls.at(-1)).toEqual({
+      method: "PATCH",
+      path: "/zones/z1/records/r1",
+      body: { record: { type: "A", name: "www", content: "192.0.2.5", data: {}, priority: undefined, proxied: true, ttl: 1, comment: "web", tags: [], settings: {} }, modifiedOn: "v1" },
+    });
+  });
+
+  it("update_dns_record: a record that isn't there is an error, with no change", async () => {
+    const { c, calls } = ctx({ "GET /zones/z1": zone });
+    const r = await call(c, "update_dns_record", { domain: "acme.it", record_id: "nope", content: "192.0.2.5" });
+    expect(json(r)).toEqual({ error: "record-not-found", params: { id: "nope" } });
+    expect(calls.some((x) => x.method === "PATCH")).toBe(false);
+  });
+
+  it("delete_dns_records deletes the records in the version it read", async () => {
+    const { c, calls } = ctx({ "GET /zones/z1": zone, "POST /zones/z1/records/delete": { done: [], zone } });
+    await call(c, "delete_dns_records", { domain: "acme.it", record_ids: ["r1"] });
+    expect(calls.at(-1)).toEqual({ method: "POST", path: "/zones/z1/records/delete", body: { records: [{ id: "r1", modifiedOn: "v1" }] } });
+  });
+
+  it("export_dns_records returns the zone file", async () => {
+    const { c } = ctx({ "TEXT /zones/z1/records/export": "www.acme.it.\t1\tIN\tA\t192.0.2.4" });
+    expect(json(await call(c, "export_dns_records", { domain: "acme.it" }))).toEqual({ file: "www.acme.it.\t1\tIN\tA\t192.0.2.4" });
   });
 });
 

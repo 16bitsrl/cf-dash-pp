@@ -21,7 +21,7 @@ export class Conflict extends Error {
 }
 
 /** One thing an action did, e.g. { op: "record.add", name: "www.example.com" }. */
-export type Done = { op: string; name?: string; value?: string };
+export type Done = { op: string; name?: string; value?: string; changes?: string };
 
 const lower = (s: string) => s.toLowerCase().replace(/\.$/, "");
 const COMMENT = "Dash++";

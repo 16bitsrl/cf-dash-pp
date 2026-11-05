@@ -2,7 +2,22 @@
 // No separate state is stored: if someone changes things by hand or with another tool,
 // the next read sees it.
 
-export type Rec = { id: string; type: string; name: string; content: string; proxied?: boolean; ttl?: number; priority?: number; comment?: string | null; meta?: { read_only?: boolean; origin_worker_id?: string } };
+export type Rec = {
+  id: string;
+  type: string;
+  name: string;
+  content: string;
+  proxied?: boolean;
+  proxiable?: boolean;
+  ttl?: number;
+  priority?: number;
+  comment?: string | null;
+  tags?: string[];
+  data?: Record<string, string | number>;
+  settings?: { flatten_cname?: boolean; ipv4_only?: boolean; ipv6_only?: boolean };
+  modified_on?: string;
+  meta?: { read_only?: boolean; origin_worker_id?: string };
+};
 export type Route = { id: string; pattern: string; script?: string };
 
 export const PARK_WORKER = "dash-plus-plus-park";
