@@ -283,7 +283,7 @@ function RecordContent({ r, acc }: { r: DisplayRecord; acc: string }) {
     );
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <div className="flex min-w-0 items-start gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 font-mono text-[13px] break-all">{recordValue(r)}</span>
         {mark && (
           <Tooltip content={t.dns.markHints[mark as "parking" | "dash"]}>

@@ -546,7 +546,7 @@ export const en = {
     readOnly: "Cloudflare manages this record: change it from the service that created it.",
     marks: { parking: "Parking", dash: "Dash++", worker: "Worker" },
     markHints: {
-      parking: "Added by Dash++ to show the parking page. Without it, the parking page stops on this name.",
+      parking: "Added by Dash++ to show the parking page. Without it, the parking page no longer shows on this name.",
       dash: "Added by Dash++.",
     },
     sortBy: (col: string) => `Sort by ${col}`,
