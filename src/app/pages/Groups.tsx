@@ -1,5 +1,5 @@
-import { Badge, Button, Checkbox, Input, LayerCard } from "@cloudflare/kumo";
-import { FoldersIcon, PencilSimpleIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { Badge, Button, Checkbox, Input, LayerCard, Select } from "@cloudflare/kumo";
+import { FoldersIcon, PencilSimpleIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
 import { useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Container, DeepLink, EmptyState, ErrorState, Loading, PageHeader } from "../components/ui";
@@ -10,6 +10,9 @@ import { useAction, useZones } from "../lib/hooks";
 import { zonePath } from "../lib/router";
 
 type Draft = { id?: string; name: string; zones: Set<string> };
+type Invite = { group: Group; email: string; role: string; tried: boolean };
+
+const validEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 
 export function Groups({ acc }: { acc: string }) {
   const t = useT();
@@ -18,6 +21,7 @@ export function Groups({ acc }: { acc: string }) {
   const { run, busy } = useAction();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [remove, setRemove] = useState<Group | null>(null);
+  const [invite, setInvite] = useState<Invite | null>(null);
   const [filter, setFilter] = useState("");
   const nameOf = new Map((zones.data?.zones ?? []).map((z) => [z.id, z.name]));
   const visible = (zones.data?.zones ?? []).filter((z) => !filter || z.name.includes(filter.toLowerCase()));
@@ -28,6 +32,16 @@ export function Groups({ acc }: { acc: string }) {
     const res = draft.id ? await run("PUT", `/accounts/${acc}/groups/${draft.id}`, body, t.groups.saved) : await run("POST", `/accounts/${acc}/groups`, body, t.groups.created);
     if (res) {
       setDraft(null);
+      q.reload();
+    }
+  }
+
+  async function sendInvite() {
+    if (!invite) return;
+    if (!validEmail(invite.email)) return setInvite({ ...invite, tried: true });
+    const email = invite.email.trim().toLowerCase();
+    if (await run("POST", `/accounts/${acc}/groups/${invite.group.id}/invite`, { email, role: invite.role }, t.groups.invited(email))) {
+      setInvite(null);
       q.reload();
     }
   }
@@ -63,6 +77,9 @@ export function Groups({ acc }: { acc: string }) {
                     <span className="text-kumo-subtle">· {t.groups.count(g.zones.length)}</span>
                   </span>
                   <span className="flex gap-1">
+                    <Button variant="ghost" size="sm" icon={UserPlusIcon} onClick={() => setInvite({ group: g, email: "", role: "dns", tried: false })}>
+                      {t.groups.invite}
+                    </Button>
                     <Button variant="ghost" size="sm" shape="square" icon={PencilSimpleIcon} aria-label={t.common.edit} onClick={() => setDraft({ id: g.id, name: g.name, zones: new Set(g.zones) })} />
                     <Button variant="ghost" size="sm" shape="square" icon={TrashIcon} aria-label={t.common.delete} onClick={() => setRemove(g)} />
                   </span>
@@ -75,6 +92,19 @@ export function Groups({ acc }: { acc: string }) {
                       </a>
                     ))}
                   </div>
+                  {!!g.access?.length && (
+                    <div className="mt-3 flex flex-col gap-1.5 border-t border-kumo-hairline pt-3">
+                      <span className="text-sm text-kumo-subtle">{t.groups.access}</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {g.access.map((m) => (
+                          <Badge key={m.email} variant="secondary">
+                            {m.email}
+                            {m.pending && <span className="text-kumo-subtle"> · {t.groups.pending}</span>}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </LayerCard.Primary>
               </LayerCard>
             ))}
@@ -115,6 +145,38 @@ export function Groups({ acc }: { acc: string }) {
                 />
               ))}
             </div>
+          </>
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={!!invite}
+        onOpenChange={(o) => !o && setInvite(null)}
+        title={invite ? t.groups.inviteTitle(invite.group.name) : ""}
+        description={t.groups.inviteDescription}
+        confirm={t.groups.send}
+        busy={busy}
+        onConfirm={sendInvite}
+      >
+        {invite && (
+          <>
+            <Input
+              label={t.groups.email}
+              type="email"
+              autoComplete="off"
+              placeholder={t.groups.emailPlaceholder}
+              value={invite.email}
+              onChange={(e) => setInvite({ ...invite, email: e.target.value })}
+              error={invite.tried && !validEmail(invite.email) ? String(t.errors["email-invalid"]) : undefined}
+            />
+            <Select
+              className="w-full"
+              label={t.groups.role}
+              value={invite.role}
+              onValueChange={(v) => setInvite({ ...invite, role: String(v) })}
+              items={t.groups.roles}
+              description={t.groups.roleHints[invite.role]}
+            />
           </>
         )}
       </ConfirmDialog>

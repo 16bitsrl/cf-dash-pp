@@ -35,7 +35,26 @@ const ok = (result: unknown, info?: object) => Response.json({ success: true, er
 const denied = () => Response.json({ success: false, errors: [{ code: 9109, message: "Unauthorized to access requested resource" }], result: null }, { status: 403 });
 const notFound = () => Response.json({ success: false, errors: [{ code: 10000, message: "not found" }], result: null }, { status: 404 });
 
-function cloudflare(url: URL, token: string, method: string, body: any): Response {
+// The tenant account's IAM: domain groups, members, and the invitations sent in a test.
+const ZONE_KEY = "com.cloudflare.api.account.zone.";
+const RESOURCE_GROUPS = [
+  { id: "rg-clients", name: "Clients", scope: { key: `com.cloudflare.api.account.${TENANT}`, objects: [{ key: `${ZONE_KEY}z1` }] } },
+  { id: "rg-account", name: "Whole account", scope: { key: `com.cloudflare.api.account.${TENANT}`, objects: [{ key: `com.cloudflare.api.account.${TENANT}` }] } },
+];
+const PERMISSION_GROUPS = [
+  { id: "pg-admin", name: "Domain Administrator", meta: { label: "domain_admin" } },
+  { id: "pg-dns", name: "Domain DNS", meta: { label: "domain_dns_admin" } },
+  { id: "pg-read", name: "Domain Administrator Read Only", meta: { label: "domain_admin_readonly" } },
+];
+const MEMBERS = [
+  { id: "m1", email: "owner@example.com", status: "accepted", policies: [{ access: "allow", permission_groups: [{ id: "pg-super" }], resource_groups: [{ id: "rg-account" }] }] },
+  { id: "m2", email: "dns@example.com", status: "pending", policies: [{ access: "allow", permission_groups: [{ id: "pg-dns" }], resource_groups: [{ id: "rg-clients" }] }] },
+];
+let invites: any[] = [];
+
+async function cloudflare(req: Request, url: URL, token: string): Promise<Response> {
+  const method = req.method;
+  const body: any = method === "GET" ? null : await req.clone().json().catch(() => null);
   const user = CF_USERS[token];
   if (!user) return Response.json({ success: false, errors: [{ code: 1000, message: "Invalid API Token" }] }, { status: 401 });
   const p = url.pathname.replace("/client/v4", "");
@@ -83,6 +102,24 @@ function cloudflare(url: URL, token: string, method: string, body: any): Respons
     const z = user.zones.find((x) => x.id === m![1]);
     return z ? ok({ id: z.id, name: z.name, status: "active", account: { id: z.account, name: "" } }) : denied();
   }
+  m = p.match(/^\/accounts\/([^/]+)\/(iam|members)/);
+  if (m && !user.accounts.includes(m[1])) return denied();
+  if (p === `/accounts/${TENANT}/iam/resource_groups`) return ok(RESOURCE_GROUPS);
+  m = p.match(/^\/accounts\/[^/]+\/iam\/resource_groups\/([^/]+)$/);
+  if (m) {
+    const g = RESOURCE_GROUPS.find((x) => x.id === m![1]);
+    return g ? ok(g) : Response.json({ success: false, errors: [{ code: 1003, message: "not found" }] }, { status: 404 });
+  }
+  if (p === `/accounts/${TENANT}/iam/permission_groups`) {
+    const label = url.searchParams.get("label");
+    return ok(PERMISSION_GROUPS.filter((g) => !label || g.meta.label === label), { page: 1, per_page: 50, count: 3 });
+  }
+  if (p === `/accounts/${TENANT}/members` && req.method === "GET") return ok(MEMBERS, { page: 1, per_page: 50, count: MEMBERS.length });
+  if (p === `/accounts/${TENANT}/members` && req.method === "POST") {
+    const body = (await req.json()) as any;
+    invites.push(body);
+    return ok({ id: "m-new", email: body.email, status: "pending", policies: body.policies });
+  }
   return Response.json({ success: false, errors: [{ code: 0, message: `not simulated: ${p}` }] }, { status: 500 });
 }
 
@@ -114,10 +151,7 @@ beforeAll(async () => {
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = new Request(input, init);
     const url = new URL(req.url);
-    if (url.hostname === "api.cloudflare.com") {
-      const body = req.method === "GET" ? null : await req.clone().json().catch(() => null);
-      return cloudflare(url, req.headers.get("authorization")?.replace(/^Bearer /, "") ?? "", req.method, body);
-    }
+    if (url.hostname === "api.cloudflare.com") return cloudflare(req, url, req.headers.get("authorization")?.replace(/^Bearer /, "") ?? "");
     if (url.hostname === "cloudflare-dns.com") return Response.json({ Answer: [] });
     return realFetch(input, init);
   });
@@ -137,6 +171,7 @@ beforeEach(async () => {
   scripts = [PARK_WORKER];
   routes = {};
   records = {};
+  invites = [];
 });
 
 const syncTokenSet = async () => !!(await env.DB.prepare("SELECT sync_token FROM tenants WHERE account_id = ?").bind(TENANT).first<{ sync_token: string | null }>())?.sync_token;
@@ -254,5 +289,55 @@ describe("domains of accounts that are not enabled", () => {
     const r = await call("stranger@example.com", "GET", "/api/zones/z9");
     expect(r.status).toBe(409);
     expect(r.json.error).toBe("not-enabled");
+  });
+});
+
+describe("domain groups", () => {
+  it("show who already has access through each group", async () => {
+    const r = await call("owner@example.com", "GET", `/api/accounts/${TENANT}/groups`);
+    expect(r.status).toBe(200);
+    expect(r.json.groups).toEqual([{ id: "rg-clients", name: "Clients", zones: ["z1"], other: 0, editable: true, access: [{ email: "dns@example.com", pending: true }] }]);
+  });
+
+  it("invite someone with access only to the group's domains", async () => {
+    const r = await call("owner@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-clients/invite`, { email: " New.Person@Example.com ", role: "dns" });
+    expect(r.status).toBe(200);
+    expect(invites).toEqual([{ email: "new.person@example.com", policies: [{ access: "allow", permission_groups: [{ id: "pg-dns" }], resource_groups: [{ id: "rg-clients" }] }] }]);
+    const log = await env.DB.prepare("SELECT action, detail FROM audit WHERE account_id = ? AND action = 'member.invite' ORDER BY at DESC").bind(TENANT).first<{ action: string; detail: string }>();
+    expect(JSON.parse(log!.detail)).toEqual([{ op: "member.invite", email: "new.person@example.com", name: "Clients" }]);
+  });
+
+  it("each role maps to its domain permission", async () => {
+    for (const role of ["admin", "read"]) await call("owner@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-clients/invite`, { email: `${role}@example.com`, role });
+    expect(invites.map((i) => i.policies[0].permission_groups[0].id)).toEqual(["pg-admin", "pg-read"]);
+  });
+
+  it("refuse an invalid email or an unknown role without inviting", async () => {
+    const bad = await call("owner@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-clients/invite`, { email: "not-an-email", role: "dns" });
+    expect(bad.json.error).toBe("email-invalid");
+    const role = await call("owner@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-clients/invite`, { email: "x@example.com", role: "super_admin" });
+    expect(role.json.error).toBe("role-invalid");
+    expect(invites).toEqual([]);
+  });
+
+  it("refuse someone who is already a member of the account", async () => {
+    const r = await call("owner@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-clients/invite`, { email: "DNS@example.com", role: "admin" });
+    expect(r.status).toBe(409);
+    expect(r.json.error).toBe("member-exists");
+    expect(invites).toEqual([]);
+  });
+
+  it("only invite through a group of domains", async () => {
+    const r = await call("owner@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-account/invite`, { email: "x@example.com", role: "admin" });
+    expect(r.status).toBe(409);
+    expect(r.json.error).toBe("group-not-domains");
+    expect(invites).toEqual([]);
+  });
+
+  it("someone outside the account cannot invite", async () => {
+    const r = await call("stranger@example.com", "POST", `/api/accounts/${TENANT}/groups/rg-clients/invite`, { email: "x@example.com", role: "admin" });
+    expect(r.status).toBe(403);
+    expect(r.json.error).toBe("forbidden");
+    expect(invites).toEqual([]);
   });
 });
