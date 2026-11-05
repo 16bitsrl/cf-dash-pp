@@ -1,9 +1,13 @@
-import { Badge, Button, DropdownMenu, Sidebar, useSidebar } from "@cloudflare/kumo";
+import { Badge, Button, Dialog, DropdownMenu, Sidebar, useSidebar } from "@cloudflare/kumo";
 import {
   ArrowBendUpRightIcon,
   ArrowSquareOutIcon,
   CaretUpDownIcon,
   CheckIcon,
+  DeviceMobileIcon,
+  ExportIcon,
+  PlusSquareIcon,
+  XIcon,
   GearSixIcon,
   PlugsConnectedIcon,
   ClockCounterClockwiseIcon,
@@ -22,12 +26,15 @@ import { QuickSearch, QuickSearchButton, useQuickSearchShortcut } from "./QuickS
 import { LANGS, setLang, useLang, useT, type Lang } from "../i18n";
 import type { Me } from "../lib/api";
 import { dash } from "../lib/format";
+import { useInstall } from "../lib/install";
 import { navigate, PAGE_PATH, useLocation, type Route } from "../lib/router";
 
 export function Shell({ me, route, children }: { me: Me; route: Route & { acc: string }; children: ReactNode }) {
   const t = useT();
   const lang = useLang();
   const [searching, setSearching] = useState(false);
+  const install = useInstall();
+  const [iosSteps, setIosSteps] = useState(false);
   useQuickSearchShortcut(setSearching);
   const account = me.accounts.find((a) => a.id === route.acc);
   const current = route.page === "zone" ? "domains" : route.page;
@@ -53,7 +60,7 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
   }
 
   return (
-    <Sidebar.Provider defaultOpen className="h-screen overflow-hidden [--sidebar-bg:var(--color-kumo-canvas)]">
+    <Sidebar.Provider defaultOpen className="h-dvh overflow-hidden [--sidebar-bg:var(--color-kumo-canvas)]">
       <Sidebar>
         <Sidebar.Header className="h-[57px] border-b border-kumo-hairline px-4">
           <div className="flex h-full items-center gap-3">
@@ -149,6 +156,11 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
                   ))}
                 </DropdownMenu.SubContent>
               </DropdownMenu.Sub>
+              {install.mode && (
+                <DropdownMenu.Item icon={DeviceMobileIcon} onClick={() => (install.mode === "prompt" ? install.prompt() : setIosSteps(true))}>
+                  {t.nav.install}
+                </DropdownMenu.Item>
+              )}
               <DropdownMenu.LinkItem href="/mcp" icon={PlugsConnectedIcon}>
                 {t.mcp.menu}
               </DropdownMenu.LinkItem>
@@ -165,6 +177,7 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
         </header>
         <main className="flex-1 pb-16">{children}</main>
         <QuickSearch me={me} acc={route.acc} open={searching} setOpen={setSearching} />
+        <IosInstall open={iosSteps} onOpenChange={setIosSteps} />
       </div>
     </Sidebar.Provider>
   );
@@ -177,4 +190,33 @@ function MobileMenu() {
   const { isMobile, setOpenMobile } = useSidebar();
   useEffect(() => setOpenMobile(false), [path, setOpenMobile]);
   return isMobile ? <Button variant="ghost" size="sm" shape="square" icon={<ListIcon size={20} />} aria-label={t.nav.menu} onClick={() => setOpenMobile(true)} /> : null;
+}
+
+/** Safari on iPhone and iPad can't install by itself: the two steps, with the icons the user will see. */
+function IosInstall({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const t = useT();
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog size="sm" className="p-6">
+        <div className="mb-3 flex items-start justify-between gap-4">
+          <Dialog.Title className="text-lg font-semibold">{t.nav.installTitle}</Dialog.Title>
+          <Dialog.Close render={(p) => <Button {...p} variant="ghost" size="sm" shape="square" icon={XIcon} aria-label={t.common.close} />} />
+        </div>
+        <Dialog.Description className="text-sm text-kumo-subtle">{t.nav.installIos}</Dialog.Description>
+        <ol className="mt-5 flex flex-col gap-4 text-sm">
+          <li className="flex items-start gap-3">
+            <ExportIcon size={22} className="shrink-0 text-kumo-link" />
+            <span>{t.nav.installStep1}</span>
+          </li>
+          <li className="flex items-start gap-3">
+            <PlusSquareIcon size={22} className="shrink-0 text-kumo-link" />
+            <span>{t.nav.installStep2}</span>
+          </li>
+        </ol>
+        <div className="mt-6 flex justify-end">
+          <Dialog.Close render={(p) => <Button {...p} variant="primary">{t.common.close}</Button>} />
+        </div>
+      </Dialog>
+    </Dialog.Root>
+  );
 }

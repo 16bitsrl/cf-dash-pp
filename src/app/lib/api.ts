@@ -36,10 +36,13 @@ export const SETUP_CODE = "dpp:setup-code";
 
 export async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
   const code = sessionStorage.getItem(SETUP_CODE);
+  // No network (or the phone lost it): a clear message, not the browser's technical one.
   const res = await fetch(`/api${path}`, {
     method,
     headers: { "x-dash-plus-plus": "1", ...(code && { "x-setup-code": code }), ...(body !== undefined && { "content-type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
+  }).catch(() => {
+    throw new ApiError(0, "offline");
   });
   const json = (await res.json().catch(() => ({}))) as { error?: string; params?: Record<string, string | number> };
   if (res.status === 401 && json.error === "login") {

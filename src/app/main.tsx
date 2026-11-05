@@ -22,6 +22,9 @@ import { Parking } from "./pages/Parking";
 import { Redirects } from "./pages/Redirects";
 import { Setup } from "./pages/Setup";
 import { ZonePage } from "./pages/Zone";
+import { registerServiceWorker } from "./lib/install";
+
+registerServiceWorker();
 
 const LAST_ACCOUNT = "dpp:account";
 // The landing keeps the full title from index.html.

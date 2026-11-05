@@ -47,3 +47,21 @@ body {
 [data-kumo-component="Checkbox"]:focus:not(:focus-visible) {
   @apply ring-1!;
 }
+
+/* Come un'app sul telefono: niente evidenziazione grigia al tocco, niente rimbalzo della pagina
+   intera, e campi a 16px sui touch (sotto i 16px iOS ingrandisce la pagina quando li tocchi). */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+body {
+  overscroll-behavior-y: none;
+}
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

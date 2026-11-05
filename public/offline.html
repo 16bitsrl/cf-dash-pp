@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#fbfbfb" />
+    <title>Dash++</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <style>
+      :root { color-scheme: light; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box;
+        background: #fbfbfb; color: #1d1d22;
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased;
+      }
+      main { max-width: 340px; text-align: center; }
+      img { width: 56px; height: 56px; }
+      h1 { font-size: 20px; margin: 20px 0 6px; letter-spacing: -0.01em; }
+      p { margin: 0 0 24px; color: #5d5f6b; }
+      button {
+        appearance: none; border: 0; border-radius: 10px; padding: 12px 22px; min-height: 44px;
+        background: #f38020; color: #fff; font: inherit; font-weight: 600; cursor: pointer;
+      }
+      button:active { transform: translateY(1px); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/logo.svg" alt="" />
+      <h1 id="t">You're offline</h1>
+      <p id="d">Dash++ needs a connection to read your domains from Cloudflare. It will open as soon as you're back online.</p>
+      <button id="b" type="button">Try again</button>
+    </main>
+    <script>
+      (function () {
+        var it = { t: "Sei offline", d: "Dash++ ha bisogno della connessione per leggere i tuoi domini da Cloudflare. Si riapre appena torni online.", b: "Riprova" };
+        var saved = null;
+        try { saved = localStorage.getItem("dpp:lang"); } catch (e) {}
+        if (saved === "it" || (!saved && /^it\b/i.test(navigator.language || ""))) {
+          document.documentElement.lang = "it";
+          ["t", "d", "b"].forEach(function (k) { document.getElementById(k).textContent = it[k]; });
+        }
+        document.getElementById("b").onclick = function () { location.reload(); };
+        window.addEventListener("online", function () { location.reload(); });
+      })();
+    </script>
+  </body>
+</html>
