@@ -2,6 +2,9 @@
 // panel uses, with the caller's token, so permissions, enabled accounts and the action log are
 // the same as in the panel.
 
+import { emptyInput, inputFromRecord, RECORD_TYPES, type RecordInput } from "./lib/dns";
+import type { Rec } from "./lib/zone-state";
+
 export class ToolError extends Error {
   constructor(
     public code: string,
@@ -15,6 +18,8 @@ export type McpCtx = {
   call: <T = any>(method: string, path: string, body?: unknown) => Promise<T>;
   /** The zone id of a domain the caller can see. */
   zone: (domain: string) => Promise<string>;
+  /** A GET of /api that answers with text, such as a zone file. */
+  text: (path: string) => Promise<string>;
 };
 
 type Args = Record<string, unknown>;
@@ -80,6 +85,45 @@ const redirectBody = (a: Args) => ({
   includeWww: a.include_www,
 });
 
+const recordProps: Record<string, Prop> = {
+  name: str("Record name: @ for the domain itself, a subdomain such as www, or the full name."),
+  content: str("Value of A, AAAA, CNAME, MX, NS, PTR, TXT and OPENPGPKEY records, such as 192.0.2.1 or mail.example.net."),
+  data: { type: "object", description: "Fields of structured records, as in the Cloudflare API: SRV {priority, weight, port, target}, CAA {flags, tag, value}, URI {weight, target}, LOC, TLSA, SSHFP, DS, HTTPS, SVCB, NAPTR, CERT, DNSKEY, SMIMEA." },
+  priority: { type: "number", description: "MX and URI: priority, 0-65535." },
+  proxied: bool("A, AAAA and CNAME: send visitors through Cloudflare. Default false."),
+  ttl: { type: "number", description: "Seconds, 60-86400, or 1 for automatic. Default 1. Proxied records are always automatic." },
+  comment: str("A note on the record, only visible in Cloudflare and Dash++."),
+  tags: { type: "array", items: { type: "string" }, description: "Tags as name:value (not on the Free plan)." },
+};
+
+/** Arguments of a record tool, over the given base. */
+function recordArgs(base: RecordInput, a: Args): RecordInput {
+  const has = (k: string) => a[k] !== undefined && a[k] !== null;
+  return {
+    ...base,
+    ...(has("type") && { type: String(a.type).toUpperCase() }),
+    ...(has("name") && { name: String(a.name) }),
+    ...(has("content") && { content: String(a.content) }),
+    ...(has("data") && { data: a.data as RecordInput["data"] }),
+    ...(has("priority") && { priority: Number(a.priority) }),
+    ...(has("proxied") && { proxied: !!a.proxied }),
+    ...(has("ttl") && { ttl: Number(a.ttl) }),
+    ...(has("comment") && { comment: String(a.comment) }),
+    ...(has("tags") && { tags: [a.tags].flat().map(String) }),
+  };
+}
+
+/** The records of a domain as they are now, to change them in the version just read. */
+async function currentRecords(c: McpCtx, zoneId: string, ids: string[]) {
+  const z = await c.call<{ zone: { name: string }; records: Rec[] }>("GET", `/zones/${zoneId}`);
+  const records = ids.map((id) => {
+    const r = z.records.find((x) => x.id === id);
+    if (!r) throw new ToolError("record-not-found", { id });
+    return r;
+  });
+  return { zone: z.zone.name, records };
+}
+
 const TOOLS: Tool[] = [
   {
     name: "list_accounts",
@@ -114,7 +158,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: "get_domain",
-    description: "Reads a domain from Cloudflare now: DNS records, parking, redirect rules (with their ids), Workers serving it, mail checks (each with an optional fix id for fix_mail; subdomains with mail records of their own have their own report, and their checks carry the subdomain name) and the latest record changes.",
+    description: "Reads a domain from Cloudflare now: DNS records (with their ids), parking, redirect rules (with their ids), Workers serving it, mail checks (each with an optional fix id for fix_mail; subdomains with mail records of their own have their own report, and their checks carry the subdomain name) and the latest record changes.",
     props: { domain },
     required: ["domain"],
     run: async (a, c) => slimZone(await c.call("GET", `/zones/${await zoneOf(c, a)}`)),
@@ -202,6 +246,51 @@ const TOOLS: Tool[] = [
     run: async (a, c) => mutation(c, "POST", `/zones/${await zoneOf(c, a)}/mail-fix`, { fix: a.fix, policy: a.policy, rua: a.report_to, include: a.include, name: a.subdomain }),
   },
   {
+    name: "add_dns_record",
+    description: "Adds a DNS record to a domain. Existing records are never replaced: Cloudflare refuses an identical record, or a name already used by a CNAME.",
+    props: { domain, type: str("Record type.", RECORD_TYPES), ...recordProps },
+    required: ["domain", "type", "name"],
+    write: true,
+    run: async (a, c) => {
+      const type = String(a.type).toUpperCase();
+      return mutation(c, "POST", `/zones/${await zoneOf(c, a)}/records`, { record: recordArgs({ ...emptyInput(type), priority: a.priority === undefined ? undefined : Number(a.priority) }, { ...a, type }) });
+    },
+  },
+  {
+    name: "update_dns_record",
+    description: "Changes a DNS record: only the fields given, the others stay as they are. Record ids are in get_domain. The result lists each old and new value.",
+    props: { domain, record_id: str("Id of the record."), ...recordProps },
+    required: ["domain", "record_id"],
+    write: true,
+    destructive: true,
+    run: async (a, c) => {
+      const zoneId = await zoneOf(c, a);
+      const { zone, records } = await currentRecords(c, zoneId, [String(a.record_id)]);
+      const rec = records[0]!;
+      return mutation(c, "PATCH", `/zones/${zoneId}/records/${encodeURIComponent(rec.id)}`, { record: recordArgs(inputFromRecord(zone, rec), { ...a, type: undefined }), modifiedOn: rec.modified_on });
+    },
+  },
+  {
+    name: "delete_dns_records",
+    description: "Deletes one or more DNS records of a domain, in a single change. Record ids are in get_domain.",
+    props: { domain, record_ids: { type: "array", items: { type: "string" }, description: "Ids of the records." } },
+    required: ["domain", "record_ids"],
+    write: true,
+    destructive: true,
+    run: async (a, c) => {
+      const zoneId = await zoneOf(c, a);
+      const { records } = await currentRecords(c, zoneId, [a.record_ids].flat().map(String));
+      return mutation(c, "POST", `/zones/${zoneId}/records/delete`, { records: records.map((r) => ({ id: r.id, modifiedOn: r.modified_on })) });
+    },
+  },
+  {
+    name: "export_dns_records",
+    description: "The DNS records of a domain as a BIND zone file, as Cloudflare exports them.",
+    props: { domain },
+    required: ["domain"],
+    run: async (a, c) => ({ file: await c.text(`/zones/${await zoneOf(c, a)}/records/export`) }),
+  },
+  {
     name: "get_parking_pages",
     description: "Parking pages of an account (anonymous or branded), the default one and which domains use another one.",
     props: { account },
@@ -281,7 +370,7 @@ export async function handleRpc(msg: Rpc, c: McpCtx): Promise<object | null> {
         protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
         capabilities: { tools: {} },
         serverInfo: { name: "dash-plus-plus", title: "Dash++", version: "1.0.0" },
-        instructions: "Dash++ manages parking, redirects and mail records of Cloudflare domains, with the signed-in user's permissions. Changes are real and immediate.",
+        instructions: "Dash++ manages DNS records, parking, redirects and mail records of Cloudflare domains, with the signed-in user's permissions. Changes are real and immediate.",
       });
     }
     case "ping":

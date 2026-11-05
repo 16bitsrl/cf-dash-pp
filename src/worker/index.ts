@@ -12,6 +12,8 @@ import { handleRpc, ToolError, type McpCtx } from "./mcp";
 import { bearer, bearerSession, completeGrant, mcpAuth, resourceMetadataUrl } from "./mcp-auth";
 import { cleanParkSettings, settingsFromVersion, type ParkSettings } from "./park/publish";
 import { ensureParkingPublished, loadParkSettings, saveAndPublish } from "./park/settings";
+import type { RecordInput } from "./lib/dns";
+import { addRecord, deleteRecords, dnsSettings, importRecords, setDnssec, setFlattenAll, updateRecord } from "./records";
 import { parkStatus, pool, syncAll, syncZone } from "./services";
 import { disableTenant, enableTenant, isTenant, loadTenants, setSyncToken, tenantTokens, tokenLink, visibleAccounts } from "./tenants";
 
@@ -468,6 +470,48 @@ api.put("/zones/:zone/mail/dmarc", async (c) => {
   return mutate(c, "mail.dmarc", ({ data }) => setDmarc(cf(c), data, { policy: body.policy, rua: body.rua?.trim() || undefined }, body.name));
 });
 
+// --- DNS records and settings ---
+
+api.post("/zones/:zone/records", async (c) => {
+  const { record } = await c.req.json<{ record: RecordInput }>();
+  return mutate(c, "record.add", ({ data }) => addRecord(cf(c), data, record ?? ({} as RecordInput)));
+});
+
+api.patch("/zones/:zone/records/:id", async (c) => {
+  const { record, modifiedOn } = await c.req.json<{ record: RecordInput; modifiedOn?: string }>();
+  return mutate(c, "record.update", ({ data }) => updateRecord(cf(c), data, c.req.param("id"), record ?? ({} as RecordInput), modifiedOn));
+});
+
+// Single and bulk delete: each record with the version the user saw.
+api.post("/zones/:zone/records/delete", async (c) => {
+  const { records } = await c.req.json<{ records?: { id: string; modifiedOn: string }[] }>();
+  return mutate(c, "record.delete", ({ data }) => deleteRecords(cf(c), data, Array.isArray(records) ? records : []));
+});
+
+api.post("/zones/:zone/records/import", async (c) => {
+  const { file, proxied } = await c.req.json<{ file?: string; proxied?: boolean }>();
+  return mutate(c, "record.import", ({ data }) => importRecords(cf(c), data, String(file ?? ""), !!proxied));
+});
+
+api.get("/zones/:zone/records/export", async (c) => {
+  const id = c.req.param("zone");
+  const [zone, res] = await Promise.all([cf(c).req<Zone>("GET", `/zones/${id}`), cf(c).fetch(`/zones/${id}/dns_records/export`)]);
+  if (!res) throw new Conflict("record-not-found");
+  return c.body(await res.text(), 200, { "content-type": "text/plain; charset=utf-8", "content-disposition": `attachment; filename="${zone.name}.txt"` });
+});
+
+api.get("/zones/:zone/dns-settings", async (c) => c.json(await dnsSettings(cf(c), c.req.param("zone"))));
+
+api.patch("/zones/:zone/dnssec", async (c) => {
+  const enable = !!(await c.req.json<{ enable?: boolean }>()).enable;
+  return mutate(c, enable ? "dnssec.enable" : "dnssec.disable", () => setDnssec(cf(c), c.req.param("zone"), enable));
+});
+
+api.patch("/zones/:zone/dns-settings", async (c) => {
+  const on = !!(await c.req.json<{ flattenAllCnames?: boolean }>()).flattenAllCnames;
+  return mutate(c, "dns.flatten-all", () => setFlattenAll(cf(c), c.req.param("zone"), on));
+});
+
 api.get("/accounts/:acc/activity", async (c) => {
   const acc = c.req.param("acc");
   await requireMember(c, acc);
@@ -655,6 +699,14 @@ app.post("/mcp", async (c) => {
       const zones = await new CfApi(who.token).req<Zone[]>("GET", `/zones?name=${encodeURIComponent(domain)}`).catch(() => []);
       if (!zones[0]) throw new ToolError("zone-not-found", { domain });
       return zones[0].id;
+    },
+    async text(path) {
+      const res = await app.fetch(new Request(new URL(`/api${path}`, c.req.url), { headers: { authorization: c.req.header("authorization")! } }), c.env, c.executionCtx);
+      if (!res.ok) {
+        const json = (await res.json().catch(() => ({}))) as { error?: string; params?: Record<string, unknown> };
+        throw new ToolError(json.error ?? "unexpected", json.params);
+      }
+      return res.text();
     },
   };
   const body = await c.req.json().catch(() => null);

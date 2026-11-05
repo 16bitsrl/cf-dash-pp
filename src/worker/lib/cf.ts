@@ -20,6 +20,7 @@ type Envelope<T> = {
   success: boolean;
   result: T;
   errors: { code: number; message: string }[];
+  messages?: { code: number; message: string }[];
   result_info?: { page: number; per_page: number; total_pages?: number; count: number; total_count?: number };
 };
 
@@ -49,10 +50,15 @@ export class CfApi {
   }
 
   async form<T>(method: string, path: string, body: FormData): Promise<T> {
+    return (await this.formWithMessages<T>(method, path, body)).result;
+  }
+
+  /** A form upload, with the messages Cloudflare adds to the result (such as records an import skipped). */
+  async formWithMessages<T>(method: string, path: string, body: FormData) {
     const res = await fetch(this.base + path, { method, headers: { authorization: `Bearer ${this.token}` }, body });
     const json = (await res.json().catch(() => null)) as Envelope<T> | null;
     if (!res.ok || !json?.success) throw new CfError(res.status, json?.errors ?? []);
-    return json.result;
+    return { result: json.result, messages: json.messages ?? [] };
   }
 
   /** A response that is not JSON (such as a Worker's content), null if not found. */

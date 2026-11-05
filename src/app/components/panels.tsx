@@ -1,8 +1,8 @@
-import { Badge, Banner, Button, Checkbox, Collapsible, Input, LayerCard, Select, Table, Tooltip } from "@cloudflare/kumo";
+import { Badge, Banner, Button, Checkbox, Collapsible, Input, LayerCard, Select, Table } from "@cloudflare/kumo";
 import { CaretRightIcon, CheckCircleIcon, CircleIcon, InfoIcon, PencilSimpleIcon, PlusIcon, TrashIcon, WarningIcon } from "@phosphor-icons/react";
 import { useState, type ReactNode } from "react";
 import type { Area, Check, FixId, NameReport } from "../../worker/lib/mail";
-import { displayRecords, type Redirect, type RedirectInput } from "../../worker/lib/zone-state";
+import type { Redirect, RedirectInput } from "../../worker/lib/zone-state";
 import { mxPreset, proposeSpf, type MxPreset } from "../../worker/lib/senders";
 import { checkText, errorText, useT } from "../i18n";
 import type { ZoneDetail } from "../lib/api";
@@ -678,80 +678,6 @@ function MailSection({ z, m, sub = false }: { z: ZoneDetail; m: NameReport; sub?
           if (await run(z.zone.id, "POST", "/mail-fix", { fix: "add-spf", ...target }, t.mail.spfAdded)) setFix(null);
         }}
       />
-    </div>
-  );
-}
-
-// --- DNS records (read only) ---
-
-export function RecordsPanel({ z }: { z: ZoneDetail }) {
-  const t = useT();
-  const acc = z.zone.account.id;
-  const records = displayRecords(z.records, z.customDomains);
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex justify-end">
-        <DeepLink href={dash.zone(z.zone.account.id, z.zone.name, "/dns/records")} />
-      </div>
-      <TableCard>
-        <Table layout="auto">
-          <Table.Header>
-            <Table.Row>
-              <Table.Head>{t.records.type}</Table.Head>
-              <Table.Head>{t.records.name}</Table.Head>
-              <Table.Head>{t.records.content}</Table.Head>
-              <Table.Head>{t.records.proxy}</Table.Head>
-              <Table.Head>{t.records.ttl}</Table.Head>
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {records.map((r) => (
-              <Table.Row key={r.key}>
-                <Table.Cell className="font-mono text-xs">{r.type}</Table.Cell>
-                <Table.Cell>{shortName(r.name, z.zone.name)}</Table.Cell>
-                <Table.Cell className="max-w-[520px]">
-                  <div className="flex min-w-0 items-center gap-2">
-                    {r.worker !== undefined ? (
-                      <Tooltip content={t.records.workerHint(r.worker || t.records.someWorker)}>
-                        <span className="flex items-center gap-2">
-                          <Badge variant="outline">Worker</Badge>
-                          <a
-                            className="font-medium text-kumo-link hover:underline"
-                            href={dash.account(acc, r.worker ? `/workers/services/view/${r.worker}/production` : "/workers-and-pages")}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {r.worker || t.records.someWorker}
-                          </a>
-                        </span>
-                      </Tooltip>
-                    ) : (
-                      <span className="truncate" title={r.content}>
-                        {r.priority !== undefined && <span className="mr-1 text-kumo-subtle">{r.priority}</span>}
-                        {r.content}
-                      </span>
-                    )}
-                  </div>
-                </Table.Cell>
-                <Table.Cell>
-                  {["A", "AAAA", "CNAME"].includes(r.type) ? (
-                    r.proxied ? (
-                      <Tooltip content={t.records.proxiedHint}>
-                        <span className="cursor-help text-[#f6821f]">{t.records.proxied}</span>
-                      </Tooltip>
-                    ) : (
-                      <span className="text-kumo-subtle">{t.records.dnsOnly}</span>
-                    )
-                  ) : (
-                    ""
-                  )}
-                </Table.Cell>
-                <Table.Cell className="text-kumo-subtle">{r.ttl === 1 ? t.records.auto : r.ttl}</Table.Cell>
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table>
-      </TableCard>
     </div>
   );
 }
