@@ -12,10 +12,12 @@ import {
   SignpostIcon,
   WarningCircleIcon,
   CloudCheckIcon,
+  DeviceMobileIcon,
+  ListBulletsIcon,
 } from "@phosphor-icons/react";
 import { LANGS, setLang, useLang, useT, type Lang } from "../i18n";
 
-const FEATURE_ICONS: Icon[] = [SignpostIcon, ArrowBendUpRightIcon, EnvelopeSimpleIcon, FoldersIcon, ClockCounterClockwiseIcon, PlugsConnectedIcon];
+const FEATURE_ICONS: Icon[] = [ListBulletsIcon, SignpostIcon, ArrowBendUpRightIcon, EnvelopeSimpleIcon, FoldersIcon, ClockCounterClockwiseIcon, DeviceMobileIcon, PlugsConnectedIcon];
 const TRUST_ICONS: Icon[] = [LockKeyIcon, CloudCheckIcon, ShieldCheckIcon];
 
 /** What people who aren't signed in see at the home page: what Dash++ does and how to get in. */
@@ -79,7 +81,7 @@ export function Landing() {
         <section className="border-t border-kumo-hairline bg-kumo-base">
           <div className="mx-auto max-w-6xl px-6 py-16 md:py-20">
             <h2 className="text-2xl font-semibold tracking-tight text-kumo-default">{l.featuresTitle}</h2>
-            <div className="mt-10 grid gap-x-10 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="mt-10 grid gap-x-10 gap-y-10 sm:grid-cols-2 lg:grid-cols-4">
               {l.features.map((f, i) => {
                 const I = FEATURE_ICONS[i];
                 return (

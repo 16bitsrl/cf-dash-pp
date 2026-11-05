@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Dash++",
   "short_name": "Dash++",
-  "description": "Parking, redirects, email checks, domain groups and a history of changes for your domains on Cloudflare.",
+  "description": "DNS records, parking, redirects, email checks, domain groups and a history of changes for your domains on Cloudflare.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
