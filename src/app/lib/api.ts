@@ -139,7 +139,7 @@ export type ZoneListItem = { id: string; name: string; status: string; paused: b
 export type ParkStatus = { published: boolean; legacy: string[] } | null;
 export type ZoneList = { park: ParkStatus; zones: ZoneListItem[] };
 export type ParkInfo = { status: NonNullable<ParkStatus>; settings: ParkSettings; publishedAt: number | null; updatedAt: number | null; updatedBy: string | null };
-export type Group = { id: string; name: string; zones: string[] };
+export type Group = { id: string; name: string; zones: string[]; access?: { email: string; pending: boolean }[] };
 export type Done = { op: string; name?: string; value?: string };
 
 export type Change = {

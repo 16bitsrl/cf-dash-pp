@@ -510,14 +510,51 @@ function groupZones(g: ResourceGroup) {
   return { zones: keys.filter((k) => k.startsWith(ZONE_KEY)).map((k) => k.slice(ZONE_KEY.length)), other: keys.filter((k) => !k.startsWith(ZONE_KEY)).length };
 }
 
+type Member = { email: string; status: string; policies?: { access: string; resource_groups?: { id: string }[] }[] };
+
 api.get("/accounts/:acc/groups", async (c) => {
-  const groups = await cf(c).req<ResourceGroup[]>("GET", `/accounts/${c.req.param("acc")}/iam/resource_groups`);
+  const acc = c.req.param("acc");
+  const [groups, members] = await Promise.all([
+    cf(c).req<ResourceGroup[]>("GET", `/accounts/${acc}/iam/resource_groups`),
+    // Who has access through each group: a nice extra, the groups show without it.
+    cf(c).all<Member>(`/accounts/${acc}/members`, 50).catch(() => null),
+  ]);
+  const access = (id: string) =>
+    members
+      ?.filter((m) => m.policies?.some((p) => p.access === "allow" && p.resource_groups?.some((r) => r.id === id)))
+      .map((m) => ({ email: m.email, pending: m.status !== "accepted" }))
+      .sort((a, b) => a.email.localeCompare(b.email));
   return c.json({
     groups: groups
-      .map((g) => ({ id: g.id, name: g.name, ...groupZones(g), editable: g.meta?.editable !== "false" }))
+      .map((g) => ({ id: g.id, name: g.name, ...groupZones(g), editable: g.meta?.editable !== "false", access: access(g.id) }))
       .filter((g) => g.editable && g.zones.length && !g.other)
       .sort((a, b) => a.name.localeCompare(b.name)),
   });
+});
+
+// Roles that can be given on a group of domains: Cloudflare permission groups, by label.
+const INVITE_ROLES: Record<string, string> = { admin: "domain_admin", dns: "domain_dns_admin", read: "domain_admin_readonly" };
+
+api.post("/accounts/:acc/groups/:id/invite", async (c) => {
+  const acc = c.req.param("acc");
+  const body = await c.req.json<{ email?: string; role?: string }>();
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) throw new Conflict("email-invalid");
+  const label = INVITE_ROLES[String(body.role)];
+  if (!label) throw new Conflict("role-invalid");
+  const group = await cf(c).req<ResourceGroup>("GET", `/accounts/${acc}/iam/resource_groups/${encodeURIComponent(c.req.param("id"))}`);
+  const { zones, other } = groupZones(group);
+  if (!zones.length || other) throw new Conflict("group-not-domains");
+  const [permission] = await cf(c).req<{ id: string }[]>("GET", `/accounts/${acc}/iam/permission_groups?label=${label}`);
+  if (!permission) throw new Conflict("role-invalid");
+  const members = await cf(c).all<Member>(`/accounts/${acc}/members`, 50);
+  if (members.some((m) => m.email.toLowerCase() === email)) throw new Conflict("member-exists");
+  await cf(c).req("POST", `/accounts/${acc}/members`, {
+    email,
+    policies: [{ access: "allow", permission_groups: [{ id: permission.id }], resource_groups: [{ id: group.id }] }],
+  });
+  await audit(c, acc, null, null, "member.invite", [{ op: "member.invite", email, name: group.name }]);
+  return c.json({ ok: true });
 });
 
 function groupBody(acc: string, body: { name?: string; zones?: string[] }) {
