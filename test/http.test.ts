@@ -419,7 +419,7 @@ describe("asking to enable an account", () => {
     expect(emails[0]).toMatchObject({ to: "admin@example.com" });
     expect(emails[0].from).toMatchObject({ email: "dash@example.com" });
     // In the superadmin's language, with the account and who asked.
-    expect(emails[0].subject).toContain("acc bbb");
+    expect(emails[0].subject).toBe("Richiesta di abilitazione per acc bbb");
     expect(emails[0].text).toContain("both@example.com");
     expect(emails[0].text).toContain("abilitare");
     expect(emails[0].text).toContain(`${BASE}/setup`);

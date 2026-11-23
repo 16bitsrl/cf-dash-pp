@@ -10,15 +10,15 @@ const LANGS: Lang[] = ["en", "it"];
 
 const TEXTS = {
   en: {
-    requestSubject: (account: string) => `Dash++: ${account} asks to be enabled`,
+    requestSubject: (account: string) => `${account} asks to be enabled`,
     requestText: (account: string, by: string, url: string) => `${by} asks to use Dash++ with the Cloudflare account ${account}.\n\nYou can enable it or decline it here:\n${url}`,
-    approvedSubject: (account: string) => `Dash++: ${account} is enabled`,
+    approvedSubject: (account: string) => `${account} is enabled`,
     approvedText: (account: string, url: string) => `The Cloudflare account ${account} is now enabled on Dash++. Everyone in the account can use it with their own permissions.\n\nOpen it:\n${url}`,
   },
   it: {
-    requestSubject: (account: string) => `Dash++: richiesta per ${account}`,
+    requestSubject: (account: string) => `Richiesta di abilitazione per ${account}`,
     requestText: (account: string, by: string, url: string) => `${by} chiede di abilitare l'account Cloudflare ${account} su Dash++.\n\nPuoi abilitarlo o rifiutare la richiesta qui:\n${url}`,
-    approvedSubject: (account: string) => `Dash++: ${account} è abilitato`,
+    approvedSubject: (account: string) => `${account} è abilitato`,
     approvedText: (account: string, url: string) => `L'account Cloudflare ${account} ora è abilitato su Dash++. Chi fa parte dell'account può usarlo con i suoi permessi.\n\nAprilo qui:\n${url}`,
   },
 } satisfies Record<Lang, unknown>;
