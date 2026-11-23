@@ -28,6 +28,7 @@ export const useLang = () =>
 
 export const useT = () => LANGS[useLang()].dict;
 export const currentDict = () => LANGS[lang].dict;
+export const currentLang = () => lang;
 
 type P = Record<string, string | number>;
 const call = (v: string | ((p: P) => string) | undefined, p: P = {}) => (typeof v === "function" ? v(p) : (v ?? ""));

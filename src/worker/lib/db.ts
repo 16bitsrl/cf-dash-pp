@@ -76,6 +76,19 @@ const SCHEMA = [
     token_set_at INTEGER,
     token_set_by TEXT
   )`,
+  // Accounts whose administrators asked to use Dash++, waiting for a superadmin.
+  `CREATE TABLE IF NOT EXISTS tenant_requests (
+    account_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    requested_by TEXT NOT NULL,
+    requested_at INTEGER NOT NULL
+  )`,
+  // Who signed in, with the language of their panel: emails are written in it.
+  `CREATE TABLE IF NOT EXISTS people (
+    email TEXT PRIMARY KEY,
+    lang TEXT NOT NULL,
+    seen_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS sync_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at INTEGER NOT NULL,

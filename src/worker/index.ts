@@ -15,7 +15,8 @@ import { ensureParkingPublished, loadParkSettings, saveAndPublish } from "./park
 import type { RecordInput } from "./lib/dns";
 import { addRecord, deleteRecords, dnsSettings, importRecords, setDnssec, setFlattenAll, updateRecord } from "./records";
 import { parkStatus, pool, syncAll, syncZone } from "./services";
-import { disableTenant, enableTenant, isTenant, loadTenants, setSyncToken, tenantTokens, tokenLink, visibleAccounts } from "./tenants";
+import { notifyApproved, notifyRequest, rememberLang } from "./notify";
+import { allTenants, disableTenant, dropTenantRequest, enableTenant, isTenant, loadTenants, requestTenant, setSyncToken, tenantRequest, tenantRequests, tenantTokens, tokenLink, visibleAccounts } from "./tenants";
 
 const app = new Hono<{ Bindings: Env; Variables: Vars }>();
 
@@ -221,11 +222,14 @@ async function requireMember(c: Ctx, accountId: string) {
     });
 }
 
-/** Whether the user manages the account (account settings, not only some of its domains). */
-async function managesAccount(c: Ctx, accountId: string) {
+/** The accounts the user manages (account settings, not only some of its domains). */
+async function managedAccounts(c: Ctx) {
   const list = await cf(c).all<{ account: { id: string }; status: string; permissions?: { organization?: { edit?: boolean } } }>("/memberships", 50);
-  return list.some((m) => m.account.id === accountId && m.status === "accepted" && m.permissions?.organization?.edit === true);
+  return new Set(list.filter((m) => m.status === "accepted" && m.permissions?.organization?.edit === true).map((m) => m.account.id));
 }
+
+/** Whether the user manages the account. */
+const managesAccount = async (c: Ctx, accountId: string) => (await managedAccounts(c)).has(accountId);
 
 /** For what affects the whole account in Dash++: its background token, its parking pages. */
 async function requireManager(c: Ctx, accountId: string) {
@@ -233,11 +237,17 @@ async function requireManager(c: Ctx, accountId: string) {
 }
 
 api.get("/me", async (c) => {
-  const [accounts, tenants] = await Promise.all([cf(c).all<Account>("/accounts", 50), loadTenants(c.env.DB)]);
+  const [accounts, tenants, requests] = await Promise.all([cf(c).all<Account>("/accounts", 50), loadTenants(c.env.DB), tenantRequests(c.env.DB), rememberLang(c.env, c.get("email"), c.req.header("x-dpp-lang"))]);
+  // Only for accounts not enabled: whether this user can ask for them.
+  const managed = accounts.some((a) => !tenants.has(a.id)) ? await managedAccounts(c) : new Set<string>();
   const lastSync = await c.env.DB.prepare("SELECT started_at, finished_at, zones, changes, error FROM sync_runs ORDER BY id DESC LIMIT 1").first();
   return c.json({
     email: c.get("email"),
-    accounts: visibleAccounts(accounts, tenants, superadmin(c)).sort((a, b) => a.name.localeCompare(b.name)),
+    accounts: visibleAccounts(accounts, tenants, new Set(requests.map((r) => r.accountId)), managed).sort((a, b) => a.name.localeCompare(b.name)),
+    // For superadmins: how many accounts wait to be enabled.
+    requests: superadmin(c) ? requests.length : 0,
+    // Whether Dash++ sends emails (for example when a requested account is enabled).
+    notifications: !!(c.env.EMAIL && c.env.EMAIL_FROM),
     // A token for every account, used where an account has none of its own.
     background: { enabled: !!(await getConfig(c.env)).serviceToken, lastSync },
     admin: superadmin(c),
@@ -251,6 +261,51 @@ api.post("/accounts/:acc/tenant", async (c) => {
   const account = await cf(c).req<Account>("GET", `/accounts/${c.req.param("acc")}`);
   await enableTenant(c.env.DB, account, c.get("email"));
   await audit(c, account.id, null, null, "tenant.enable", []);
+  return c.json({ ok: true });
+});
+
+// Requests to enable an account: who manages it asks, a superadmin answers.
+
+api.post("/tenant-requests", async (c) => {
+  const accountId = String((await c.req.json<{ accountId?: string }>()).accountId ?? "");
+  if (!/^[0-9a-f]{32}$/.test(accountId)) throw new Conflict("bad-request");
+  // The name comes from Cloudflare, read as the one asking: they must be in the account.
+  const account = await cf(c)
+    .req<Account>("GET", `/accounts/${accountId}`)
+    .catch((e) => {
+      throw e instanceof CfError && e.notFound ? new CfError(403, e.errors) : e;
+    });
+  await requireManager(c, accountId);
+  if (await isTenant(c.env.DB, accountId)) return c.json({ ok: true });
+  if (await requestTenant(c.env.DB, account, c.get("email"))) {
+    await audit(c, accountId, null, null, "tenant.request", []);
+    await notifyRequest(c.env, await admins(c.env), account.name, c.get("email"), `${publicUrl(c)}/setup`);
+  }
+  return c.json({ ok: true });
+});
+
+api.get("/tenant-requests", async (c) => {
+  if (!superadmin(c)) throw new Conflict("not-admin");
+  const [requests, tenants, mine] = await Promise.all([tenantRequests(c.env.DB), allTenants(c.env.DB), cf(c).all<Account>("/accounts", 50)]);
+  // Enabled accounts the superadmin is not in (enabled on request): listed apart, to disable them.
+  const others = tenants.filter((t) => !mine.some((a) => a.id === t.id));
+  return c.json({ requests, others });
+});
+
+api.post("/tenant-requests/:acc/approve", async (c) => {
+  if (!superadmin(c)) throw new Conflict("not-admin");
+  const req = await tenantRequest(c.env.DB, c.req.param("acc"));
+  if (!req) throw new Conflict("request-gone");
+  await enableTenant(c.env.DB, { id: req.accountId, name: req.name }, c.get("email"));
+  await audit(c, req.accountId, null, null, "tenant.enable", []);
+  await notifyApproved(c.env, req.requestedBy, req.name, `${publicUrl(c)}/${req.accountId}`);
+  return c.json({ ok: true });
+});
+
+api.delete("/tenant-requests/:acc", async (c) => {
+  if (!superadmin(c)) throw new Conflict("not-admin");
+  await dropTenantRequest(c.env.DB, c.req.param("acc"));
+  await audit(c, c.req.param("acc"), null, null, "tenant.decline", []);
   return c.json({ ok: true });
 });
 

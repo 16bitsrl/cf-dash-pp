@@ -7,7 +7,7 @@ import { insertSession, type Env } from "../src/worker/auth";
 import worker from "../src/worker/index";
 import { sha256 } from "../src/worker/lib/crypto";
 import { ensureSchema } from "../src/worker/lib/db";
-import { enableTenant, setSyncToken } from "../src/worker/tenants";
+import { disableTenant, enableTenant, setSyncToken } from "../src/worker/tenants";
 
 const BASE = "https://dash.example.com";
 const TENANT = "a".repeat(32);
@@ -25,6 +25,12 @@ const CF_USERS: Record<string, CfUser> = {
   "tok-reader": { accounts: [TENANT], zones: [{ id: "z1", name: "tenant.it", account: TENANT }], readOnly: true },
   // The account's background token: reads everything in the account.
   "sync-secret": { accounts: [TENANT], zones: [] },
+  // The superadmin of this Dash++: member of the enabled account only.
+  "tok-admin": { accounts: [TENANT], admin: [TENANT], zones: [] },
+  // Already uses the enabled account and manages another one, not enabled yet.
+  "tok-both": { accounts: [TENANT, OTHER], admin: [OTHER], zones: [] },
+  // Member of the account not enabled, without managing it.
+  "tok-other-member": { accounts: [OTHER], zones: [] },
 };
 
 // What exists on Cloudflare: Workers of the account, routes and records of each zone.
@@ -207,6 +213,9 @@ async function cloudflare(req: Request, url: URL, token: string): Promise<Respon
   return Response.json({ success: false, errors: [{ code: 0, message: `not simulated: ${p}` }] }, { status: 500 });
 }
 
+// Emails sent by Dash++ (the sending service is not ours to run).
+let emails: { from: any; to: any; subject: string; text?: string; html?: string }[] = [];
+
 let mf: Miniflare;
 let env: Env;
 const cookies: Record<string, string> = {};
@@ -219,8 +228,8 @@ async function signIn(email: string, token: string) {
 
 const ctx = () => ({ waitUntil: (p: Promise<unknown>) => void p.catch(() => {}), passThroughOnException() {}, props: {} }) as unknown as ExecutionContext;
 
-async function call(email: string, method: string, path: string, body?: unknown) {
-  const headers: Record<string, string> = { cookie: cookies[email], "x-dash-plus-plus": "1", origin: BASE };
+async function call(email: string, method: string, path: string, body?: unknown, lang?: string) {
+  const headers: Record<string, string> = { cookie: cookies[email], "x-dash-plus-plus": "1", origin: BASE, ...(lang && { "x-dpp-lang": lang }) };
   if (body !== undefined) headers["content-type"] = "application/json";
   const res = await worker.fetch(new Request(`${BASE}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }), env, ctx());
   return { status: res.status, json: (await res.json().catch(() => null)) as any };
@@ -229,7 +238,7 @@ async function call(email: string, method: string, path: string, body?: unknown)
 beforeAll(async () => {
   mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: "export default {}", d1Databases: ["DB"] }));
   const DB = (await mf.getD1Database("DB")) as unknown as D1Database;
-  env = { DB, ASSETS: { fetch: async () => new Response("asset") } as unknown as Fetcher, SESSION_KEY: "test-key", OAUTH_CLIENT_ID: "", OAUTH_CLIENT_SECRET: "", ADMIN_EMAILS: "admin@example.com" };
+  env = { DB, ASSETS: { fetch: async () => new Response("asset") } as unknown as Fetcher, SESSION_KEY: "test-key", OAUTH_CLIENT_ID: "", OAUTH_CLIENT_SECRET: "", ADMIN_EMAILS: "admin@example.com", EMAIL_FROM: "dash@example.com", EMAIL: { send: async (m: any) => (emails.push(m), { messageId: "x" }) } as unknown as SendEmail };
   await ensureSchema(DB);
   const realFetch = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -243,6 +252,9 @@ beforeAll(async () => {
   await signIn("stranger@example.com", "tok-stranger");
   await signIn("domains@example.com", "tok-domains");
   await signIn("reader@example.com", "tok-reader");
+  await signIn("admin@example.com", "tok-admin");
+  await signIn("both@example.com", "tok-both");
+  await signIn("member@example.com", "tok-other-member");
 });
 
 afterAll(async () => {
@@ -262,6 +274,9 @@ beforeEach(async () => {
   dnssecDenied = false;
   imports = [];
   writes = [];
+  emails = [];
+  await disableTenant(env.DB, OTHER);
+  await env.DB.prepare("DELETE FROM tenant_requests").run();
 });
 
 const syncTokenSet = async () => !!(await env.DB.prepare("SELECT sync_token FROM tenants WHERE account_id = ?").bind(TENANT).first<{ sync_token: string | null }>())?.sync_token;
@@ -378,6 +393,93 @@ describe("domains of accounts that are not enabled", () => {
     // z9 belongs to an account nobody enabled; its owner signs in but is not a superadmin.
     const r = await call("stranger@example.com", "GET", "/api/zones/z9");
     expect(r.status).toBe(409);
+    expect(r.json.error).toBe("not-enabled");
+  });
+});
+
+describe("asking to enable an account", () => {
+  const meOf = async (email: string) => (await call(email, "GET", "/api/me")).json;
+  const lastTenantAudit = () => env.DB.prepare("SELECT action, actor, account_id FROM audit WHERE action LIKE 'tenant.%' ORDER BY id DESC LIMIT 1").first();
+
+  it("everyone sees their accounts that are not enabled, and whether they can ask for them", async () => {
+    const both = await meOf("both@example.com");
+    expect(both.accounts.map((a: any) => [a.id, a.enabled, a.canRequest])).toEqual([
+      [TENANT, true, false],
+      [OTHER, false, true],
+    ]);
+    expect((await meOf("member@example.com")).accounts).toEqual([expect.objectContaining({ id: OTHER, enabled: false, canRequest: false })]);
+  });
+
+  it("an administrator of the account asks, and the superadmins are told by email", async () => {
+    await call("admin@example.com", "GET", "/api/me", undefined, "it");
+    const r = await call("both@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    expect(r.status).toBe(200);
+    expect((await meOf("both@example.com")).accounts.find((a: any) => a.id === OTHER)).toMatchObject({ enabled: false, requested: true });
+    expect(emails).toHaveLength(1);
+    expect(emails[0]).toMatchObject({ to: "admin@example.com" });
+    expect(emails[0].from).toMatchObject({ email: "dash@example.com" });
+    // In the superadmin's language, with the account and who asked.
+    expect(emails[0].subject).toContain("acc bbb");
+    expect(emails[0].text).toContain("both@example.com");
+    expect(emails[0].text).toContain("abilitare");
+    expect(emails[0].text).toContain(`${BASE}/setup`);
+    const list = await call("admin@example.com", "GET", "/api/tenant-requests");
+    expect(list.json.requests).toEqual([expect.objectContaining({ accountId: OTHER, name: "acc bbb", requestedBy: "both@example.com" })]);
+  });
+
+  it("asking twice sends no second email", async () => {
+    await call("both@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    await call("both@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    expect(emails).toHaveLength(1);
+  });
+
+  it("only who manages the account can ask", async () => {
+    const r = await call("member@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    expect(r.status).toBe(403);
+    expect(emails).toHaveLength(0);
+    expect((await call("admin@example.com", "GET", "/api/tenant-requests")).json.requests).toEqual([]);
+  });
+
+  it("nobody can ask for an account they are not in", async () => {
+    const r = await call("owner@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    expect(r.status).toBe(403);
+  });
+
+  it("only superadmins see and answer the requests", async () => {
+    await call("both@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    expect((await call("both@example.com", "GET", "/api/tenant-requests")).json.error).toBe("not-admin");
+    expect((await call("both@example.com", "POST", `/api/tenant-requests/${OTHER}/approve`)).json.error).toBe("not-admin");
+    expect((await call("both@example.com", "DELETE", `/api/tenant-requests/${OTHER}`)).json.error).toBe("not-admin");
+    expect((await meOf("both@example.com")).accounts.find((a: any) => a.id === OTHER).enabled).toBe(false);
+  });
+
+  it("a superadmin enables it without being a member, and who asked is told", async () => {
+    await call("both@example.com", "POST", "/api/tenant-requests", { accountId: OTHER }, "en");
+    emails = [];
+    const r = await call("admin@example.com", "POST", `/api/tenant-requests/${OTHER}/approve`);
+    expect(r.status).toBe(200);
+    expect((await meOf("both@example.com")).accounts.find((a: any) => a.id === OTHER)).toMatchObject({ enabled: true });
+    expect((await meOf("member@example.com")).accounts[0]).toMatchObject({ id: OTHER, enabled: true });
+    expect((await call("admin@example.com", "GET", "/api/tenant-requests")).json.requests).toEqual([]);
+    expect(await lastTenantAudit()).toMatchObject({ action: "tenant.enable", actor: "admin@example.com", account_id: OTHER });
+    expect(emails).toEqual([expect.objectContaining({ to: "both@example.com" })]);
+    expect(emails[0].text).toContain("enabled");
+    expect(emails[0].text).toContain(`${BASE}/${OTHER}`);
+    // The superadmin is not in that account, but still sees it among the enabled ones, to disable it.
+    expect((await call("admin@example.com", "GET", "/api/tenant-requests")).json.others).toEqual([expect.objectContaining({ id: OTHER, name: "acc bbb", addedBy: "admin@example.com" })]);
+    expect((await call("admin@example.com", "DELETE", `/api/accounts/${OTHER}/tenant`)).status).toBe(200);
+    expect((await meOf("both@example.com")).accounts.find((a: any) => a.id === OTHER).enabled).toBe(false);
+  });
+
+  it("a superadmin can decline it: the account stays as it was", async () => {
+    await call("both@example.com", "POST", "/api/tenant-requests", { accountId: OTHER });
+    const r = await call("admin@example.com", "DELETE", `/api/tenant-requests/${OTHER}`);
+    expect(r.status).toBe(200);
+    expect((await meOf("both@example.com")).accounts.find((a: any) => a.id === OTHER)).toMatchObject({ enabled: false, requested: false });
+  });
+
+  it("an account that is not enabled stays closed to its members", async () => {
+    const r = await call("both@example.com", "GET", `/api/accounts/${OTHER}/activity`);
     expect(r.json.error).toBe("not-enabled");
   });
 });

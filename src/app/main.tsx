@@ -20,6 +20,7 @@ import { Landing } from "./pages/Landing";
 import { Mail } from "./pages/Mail";
 import { Parking } from "./pages/Parking";
 import { Redirects } from "./pages/Redirects";
+import { RequestAccess } from "./pages/RequestAccess";
 import { Setup } from "./pages/Setup";
 import { ZonePage } from "./pages/Zone";
 import { registerServiceWorker } from "./lib/install";
@@ -127,7 +128,8 @@ function App() {
     const ids = me.data.accounts.map((a) => a.id);
     if (route.page === "root" || route.page === "notfound" || ("acc" in route && !ids.includes(route.acc))) {
       const last = localStorage.getItem(LAST_ACCOUNT);
-      const acc = last && ids.includes(last) ? last : ids[0];
+      // The last one used, otherwise the first that is enabled.
+      const acc = last && ids.includes(last) ? last : (me.data.accounts.find((a) => a.enabled) ?? me.data.accounts[0])?.id;
       if (acc) navigate(`/${acc}`, true);
     } else if ("acc" in route) {
       localStorage.setItem(LAST_ACCOUNT, route.acc);
@@ -155,7 +157,10 @@ function App() {
     return <Loading />;
   }
 
+  const current = me.data.accounts.find((a) => a.id === route.acc)!;
   const page = (() => {
+    // Not enabled yet: only superadmins open it (to enable it), the others can ask for it.
+    if (!current.enabled && !me.data.admin) return <RequestAccess me={me.data} acc={route.acc} onMeChange={me.reload} />;
     switch (route.page) {
       case "home":
         return <Home me={me.data} acc={route.acc} onMeChange={me.reload} />;

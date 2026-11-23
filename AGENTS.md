@@ -20,6 +20,7 @@ La documentazione di progetto è in `docs/`:
 - Usa `cf` per deploy e risorse (`cloudflare.config.ts`), non Wrangler.
 - Interfaccia in inglese di base, con traduzione italiana: ogni testo visibile sta in
   `src/app/i18n/en.ts` e `it.ts`. Il Worker restituisce codici e parametri, mai testi.
+  Unica eccezione: le email, con i testi in `src/worker/notify.ts`.
 - Testi per chi usa il prodotto, niente dettagli tecnici.
 - Componenti e token Kumo (`npx @cloudflare/kumo doc <Componente>`), niente colori
   Tailwind grezzi.

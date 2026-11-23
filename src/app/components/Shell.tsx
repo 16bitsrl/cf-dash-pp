@@ -82,7 +82,7 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
                     {a.name}
                     {!a.enabled && (
                       <Badge variant="outline" className="ml-2">
-                        {t.setup.statusOff}
+                        {a.requested ? t.setup.statusRequested : t.setup.statusOff}
                       </Badge>
                     )}
                   </DropdownMenu.Item>
@@ -167,6 +167,11 @@ export function Shell({ me, route, children }: { me: Me; route: Route & { acc: s
               {me.admin && (
                 <DropdownMenu.LinkItem href="/setup" icon={GearSixIcon}>
                   {t.nav.setup}
+                  {me.requests > 0 && (
+                    <Badge variant="primary" className="ml-2">
+                      {me.requests}
+                    </Badge>
+                  )}
                 </DropdownMenu.LinkItem>
               )}
               <DropdownMenu.Item icon={SignOutIcon} onClick={signOut}>

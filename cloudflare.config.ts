@@ -4,13 +4,15 @@ import * as entrypoint from "./src/worker/index.ts" with { type: "cf-worker" };
 
 // Installed with the Deploy to Cloudflare button, nothing needs setting: the account comes from the
 // build and Dash++ answers on workers.dev. An installation of your own can set these in `.env`:
-// DPP_ACCOUNT_ID, DPP_HOSTNAME (a custom domain), DPP_ADMIN_EMAILS (comma separated).
+// DPP_ACCOUNT_ID, DPP_HOSTNAME (a custom domain), DPP_ADMIN_EMAILS (comma separated),
+// DPP_EMAIL_FROM (an address on a domain with Cloudflare Email Sending, to send notifications).
 try {
   process.loadEnvFile(".env");
 } catch {}
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID ?? process.env.DPP_ACCOUNT_ID;
 const hostname = process.env.DPP_HOSTNAME;
 const admins = process.env.DPP_ADMIN_EMAILS;
+const emailFrom = process.env.DPP_EMAIL_FROM;
 
 export default defineConfig(({ mode }) => ({
   accountId,
@@ -35,6 +37,9 @@ export default defineConfig(({ mode }) => ({
       ACCOUNT_ID: !!accountId && bindings.text(accountId),
       // Superadmins: open the setup page and enable accounts. Without them, the first to sign in.
       ADMIN_EMAILS: !!admins && bindings.text(admins),
+      // Emails: requests to enable an account, and their answers.
+      EMAIL: !!emailFrom && bindings.sendEmail({ allowedSenderAddresses: [emailFrom] }),
+      EMAIL_FROM: !!emailFrom && bindings.text(emailFrom),
       OAUTH_CLIENT_ID: bindings.text(process.env.DPP_OAUTH_CLIENT_ID ?? ""),
       SESSION_KEY: bindings.secret(),
       // An installation of your own may give these at deploy; otherwise they are set from the

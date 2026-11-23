@@ -7,7 +7,7 @@ import { checkText, useT } from "../i18n";
 import { useApi, type Change, type Me } from "../lib/api";
 import { shortName, useFormat } from "../lib/format";
 import { useAction, useZones } from "../lib/hooks";
-import { zonePath, type ZoneTab } from "../lib/router";
+import { navigate, zonePath, type ZoneTab } from "../lib/router";
 import { SyncButton } from "./Domains";
 
 function Stat({ label, value, href, hint }: { label: string; value: ReactNode; href: string; hint?: string }) {
@@ -55,6 +55,13 @@ export function Home({ me, acc, onMeChange }: { me: Me; acc: string; onMeChange:
     <>
       <PageHeader title={t.home.title} description={t.home.description(account?.name ?? "")} actions={<SyncButton syncing={syncing} onClick={syncAll} />} />
       <Container className="flex flex-col gap-6 pt-6">
+        {me.requests > 0 && (
+          <Banner
+            icon={<InfoIcon weight="fill" />}
+            title={t.home.pendingRequests(me.requests)}
+            action={<Banner.Action onClick={() => navigate("/setup")}>{t.home.seeRequests}</Banner.Action>}
+          />
+        )}
         {account && !account.enabled ? (
           <Banner
             variant="alert"

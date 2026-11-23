@@ -12,23 +12,22 @@ const tenants = new Map([
 ]);
 
 describe("visibleAccounts", () => {
-  it("chi non è superadmin vede solo gli account abilitati", () => {
-    expect(visibleAccounts(accounts, tenants, false)).toEqual([
-      { id: "a16", name: "16bit", enabled: true, syncToken: true },
-      { id: "away", name: "WAY", enabled: true, syncToken: false },
-    ]);
-  });
-
-  it("il superadmin vede anche quelli non abilitati, segnati come tali", () => {
-    expect(visibleAccounts(accounts, tenants, true).map((a) => [a.id, a.enabled])).toEqual([
+  it("everyone sees all their accounts, those not enabled marked as such", () => {
+    expect(visibleAccounts(accounts, tenants, new Set(), new Set()).map((a) => [a.id, a.enabled])).toEqual([
       ["a16", true],
       ["away", true],
       ["aother", false],
     ]);
   });
 
-  it("senza account abilitati chi non è superadmin non vede niente", () => {
-    expect(visibleAccounts(accounts, new Map(), false)).toEqual([]);
+  it("an account not enabled can be asked for by who manages it, once", () => {
+    const [, , other] = visibleAccounts(accounts, tenants, new Set(), new Set(["aother", "a16"]));
+    expect(other).toMatchObject({ canRequest: true, requested: false });
+    expect(visibleAccounts(accounts, tenants, new Set(["aother"]), new Set(["aother"]))[2]).toMatchObject({ requested: true });
+  });
+
+  it("nothing to ask for an account already enabled", () => {
+    expect(visibleAccounts(accounts, tenants, new Set(["a16"]), new Set(["a16"]))[0]).toMatchObject({ enabled: true, canRequest: false, requested: false });
   });
 });
 

@@ -22,6 +22,9 @@ export type Env = {
   ACCOUNT_ID?: string;
   // Given at install time: opens the setup page until signing in works.
   SETUP_CODE?: string;
+  // Email sending (optional): requests to enable an account and their answers.
+  EMAIL?: SendEmail;
+  EMAIL_FROM?: string;
   // Local development only (localhost): skips the sign-in and uses this token.
   DEV_TOKEN?: string;
   DEV_EMAIL?: string;

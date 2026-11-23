@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type { Check, MailReport } from "../../worker/lib/mail";
 import type { ParkSettings } from "../../worker/park/publish";
 import type { Parking, Rec, Redirect, Route } from "../../worker/lib/zone-state";
-import { currentDict, errorText } from "../i18n";
+import { currentDict, currentLang, errorText } from "../i18n";
 
 export class ApiError extends Error {
   constructor(
@@ -40,7 +40,7 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   // No network (or the phone lost it): a clear message, not the browser's technical one.
   const res = await fetch(`/api${path}`, {
     method,
-    headers: { "x-dash-plus-plus": "1", ...(code && { "x-setup-code": code }), ...(body !== undefined && { "content-type": "application/json" }) },
+    headers: { "x-dash-plus-plus": "1", "x-dpp-lang": currentLang(), ...(code && { "x-setup-code": code }), ...(body !== undefined && { "content-type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
   }).catch(() => {
     throw new ApiError(0, "offline");
@@ -121,8 +121,12 @@ export function useApi<T>(path: string | null) {
 export type Me = {
   email: string;
   admin: boolean;
-  // enabled false only for superadmins, who see every account of theirs to enable it.
-  accounts: { id: string; name: string; enabled: boolean; syncToken: boolean }[];
+  // Every account of theirs. Not enabled: only superadmins open it, the others can ask for it
+  // (canRequest, if they manage it) and see if it was asked for (requested).
+  accounts: { id: string; name: string; enabled: boolean; syncToken: boolean; requested: boolean; canRequest: boolean }[];
+  // Superadmins: accounts waiting to be enabled.
+  requests: number;
+  notifications: boolean;
   background: { enabled: boolean; lastSync: { started_at: number; finished_at: number | null; zones: number | null; changes: number | null; error: string | null } | null };
 };
 

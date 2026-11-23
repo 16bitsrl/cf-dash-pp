@@ -50,6 +50,7 @@ export function Setup({ standalone }: { standalone?: boolean }) {
   const f = useFormat();
   const q = useApi<SetupInfo>("/setup");
   const me = useApi<Me>("/me");
+  const requests = useApi<{ requests: { accountId: string; name: string; requestedBy: string; requestedAt: number }[]; others: { id: string; name: string; addedBy: string; addedAt: number }[] }>(me.data?.admin ? "/tenant-requests" : null);
   const { run, busy } = useAction();
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
@@ -161,6 +162,40 @@ export function Setup({ standalone }: { standalone?: boolean }) {
           action={<Banner.Action onClick={() => (location.href = "/auth/login?return=/")}>{t.setup.tryLogin}</Banner.Action>}
         />
       )}
+      {!!requests.data?.requests.length && (
+        <Step title={t.setup.requests} state="todo">
+          <ul className="divide-y divide-kumo-hairline rounded-lg border border-kumo-hairline">
+            {requests.data.requests.map((r) => (
+              <li key={r.accountId} className="flex flex-wrap items-center justify-between gap-3 p-4">
+                <div>
+                  <div className="font-medium">{r.name}</div>
+                  <div className="text-kumo-subtle">{t.setup.requestedBy(r.requestedBy, f.ago(r.requestedAt))}</div>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (await run("DELETE", `/tenant-requests/${r.accountId}`, undefined, t.setup.declined)) requests.reload(), me.reload();
+                    }}
+                  >
+                    {t.setup.decline}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (await run("POST", `/tenant-requests/${r.accountId}/approve`, {}, t.home.enabled)) requests.reload(), me.reload();
+                    }}
+                  >
+                    {t.setup.approve}
+                  </Button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Step>
+      )}
       {me.data && (
         <Step title={t.setup.accounts} state={me.data.accounts.some((a) => a.enabled) ? "done" : "todo"}>
           <p className="text-kumo-subtle">{t.setup.accountsText}</p>
@@ -170,7 +205,7 @@ export function Setup({ standalone }: { standalone?: boolean }) {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="font-medium">{a.name}</div>
-                    <div className="text-kumo-subtle">{!a.enabled ? t.setup.statusOff : a.syncToken ? t.setup.statusOwn : s.service.configured ? t.setup.statusShared : t.setup.statusNone}</div>
+                    <div className="text-kumo-subtle">{!a.enabled ? (a.requested ? t.setup.statusRequested : t.setup.statusOff) : a.syncToken ? t.setup.statusOwn : s.service.configured ? t.setup.statusShared : t.setup.statusNone}</div>
                   </div>
                   <Switch
                     aria-label={t.setup.accountEnabled(a.name)}
@@ -194,6 +229,29 @@ export function Setup({ standalone }: { standalone?: boolean }) {
               </li>
             ))}
           </ul>
+          {!!requests.data?.others.length && (
+            <>
+              <p className="text-kumo-subtle">{t.setup.othersText}</p>
+              <ul className="divide-y divide-kumo-hairline rounded-lg border border-kumo-hairline">
+                {requests.data.others.map((a) => (
+                  <li key={a.id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+                    <div>
+                      <div className="font-medium">{a.name}</div>
+                      <div className="text-kumo-subtle">{t.setup.enabledBy(a.addedBy, f.ago(a.addedAt))}</div>
+                    </div>
+                    <Switch
+                      aria-label={t.setup.accountEnabled(a.name)}
+                      checked
+                      disabled={busy}
+                      onCheckedChange={async () => {
+                        if (await run("DELETE", `/accounts/${a.id}/tenant`, {}, t.setup.disabled)) requests.reload();
+                      }}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </Step>
       )}
 
